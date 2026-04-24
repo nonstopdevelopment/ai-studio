@@ -56,6 +56,41 @@ type GeneratedArtifact = {
 
 type OutputFormat = 'markdown' | 'text' | 'json';
 
+type AdminJob = {
+  requestId: string;
+  userId: string;
+  sessionId: string;
+  workflowId: string;
+  outputFormat: string;
+  status: string;
+  queuedAt: string;
+  startedAt: string | null;
+  completedAt?: string;
+  queuedMs: number;
+  runningMs: number;
+  latencyMs?: number;
+  totalMs?: number;
+  promptChars: number;
+  outputChars?: number;
+  totalTokens?: number | null;
+  error?: string | null;
+};
+
+type AdminMetrics = {
+  generatedAt: string;
+  status: GatewayStatus & { sharedStorage?: string };
+  throughput: {
+    recentCompleted: number;
+    recentFailed: number;
+    avgLatencyMs: number;
+    p95LatencyMs: number;
+    maxLatencyMs: number;
+  };
+  activeJobs: AdminJob[];
+  queuedJobs: AdminJob[];
+  recentRequests: AdminJob[];
+};
+
 const artifactDemoPrompt =
   'Create a deployment readiness brief for moving Tampa Devs AI Studio from local port-forward testing into OKD. Include sections for user experience, gateway/session memory, generated artifacts, object storage, rate limiting for one loaded vLLM model, observability, rollback, and a short operator checklist. Format it as Markdown that could be saved as a project file.';
 
@@ -85,6 +120,189 @@ function StatTile({ label, value }: { label: string; value: ReactNode }) {
       <span>{label}</span>
       <strong>{value}</strong>
     </div>
+  );
+}
+
+function AdminDashboard() {
+  const [token, setToken] = useState(() => window.localStorage.getItem('ai-studio-admin-token') ?? '');
+  const [draftToken, setDraftToken] = useState(token);
+  const [metrics, setMetrics] = useState<AdminMetrics | null>(null);
+  const [error, setError] = useState('');
+  const [isPaused, setIsPaused] = useState(false);
+
+  useEffect(() => {
+    let canceled = false;
+
+    async function refreshMetrics() {
+      if (!token || isPaused) {
+        return;
+      }
+
+      try {
+        const response = await fetch('/api/admin/metrics', {
+          headers: {
+            authorization: `Bearer ${token}`,
+          },
+        });
+        const body = await response.json();
+        if (!response.ok) {
+          throw new Error(body.error ?? `Admin metrics failed with ${response.status}`);
+        }
+
+        if (!canceled) {
+          setMetrics(body as AdminMetrics);
+          setError('');
+        }
+      } catch (refreshError) {
+        if (!canceled) {
+          setError(formatClientError(refreshError));
+        }
+      }
+    }
+
+    void refreshMetrics();
+    const interval = window.setInterval(refreshMetrics, 3000);
+    return () => {
+      canceled = true;
+      window.clearInterval(interval);
+    };
+  }, [token, isPaused]);
+
+  function saveToken() {
+    const nextToken = draftToken.trim();
+    setToken(nextToken);
+    window.localStorage.setItem('ai-studio-admin-token', nextToken);
+  }
+
+  function clearToken() {
+    setToken('');
+    setDraftToken('');
+    setMetrics(null);
+    window.localStorage.removeItem('ai-studio-admin-token');
+  }
+
+  return (
+    <div className="studio-app admin-app">
+      <header className="studio-topbar">
+        <div className="project-mark" aria-label="OnTampa private monitor">
+          <span className="pirate-mark" aria-hidden="true">
+            <img src="/ontampa-pirate.png" alt="" />
+          </span>
+          <span className="project-mark__text">
+            <strong>Ops Monitor</strong>
+            <small>Private queue view</small>
+          </span>
+        </div>
+        <div className="studio-topbar__center">
+          <h1>AI Studio Operations</h1>
+          <p>
+            {metrics
+              ? `Updated ${new Date(metrics.generatedAt).toLocaleTimeString()} from ${metrics.status.sharedStorage ?? 'gateway'} storage.`
+              : 'Enter the admin token to monitor queue and request timing.'}
+          </p>
+        </div>
+        <a className="admin-return-link" href="/">
+          Back to studio
+        </a>
+      </header>
+
+      <main className="admin-shell">
+        <section className="admin-auth-panel">
+          <label className="prompt-label" htmlFor="admin-token">
+            Admin token
+          </label>
+          <input
+            id="admin-token"
+            className="admin-token-input"
+            type="password"
+            value={draftToken}
+            onChange={(event) => setDraftToken(event.target.value)}
+            placeholder="Paste ADMIN_TOKEN"
+          />
+          <div className="composer-actions">
+            <StudioButton variant="secondary" onClick={() => setIsPaused((current) => !current)}>
+              {isPaused ? 'Resume' : 'Pause'}
+            </StudioButton>
+            <StudioButton variant="secondary" onClick={clearToken}>
+              Clear
+            </StudioButton>
+            <StudioButton onClick={saveToken}>Connect</StudioButton>
+          </div>
+          {error ? <p className="admin-error">{error}</p> : null}
+        </section>
+
+        {metrics ? (
+          <>
+            <section className="admin-grid">
+              <StatTile label="Active" value={metrics.status.activeRequests} />
+              <StatTile label="Queued" value={metrics.status.queueDepth} />
+              <StatTile label="Avg latency" value={formatPolicyWindow(metrics.throughput.avgLatencyMs)} />
+              <StatTile label="P95 latency" value={formatPolicyWindow(metrics.throughput.p95LatencyMs)} />
+              <StatTile label="Completed" value={metrics.status.completedRequests} />
+              <StatTile label="Failed" value={metrics.status.failedRequests} />
+              <StatTile label="Recent ok" value={metrics.throughput.recentCompleted} />
+              <StatTile label="Recent failed" value={metrics.throughput.recentFailed} />
+            </section>
+
+            <section className="admin-panels">
+              <AdminJobTable title="Active jobs" jobs={metrics.activeJobs} empty="No active model request." />
+              <AdminJobTable title="Queued jobs" jobs={metrics.queuedJobs} empty="Queue is empty." />
+              <AdminJobTable title="Recent requests" jobs={metrics.recentRequests} empty="No completed requests yet." />
+            </section>
+          </>
+        ) : null}
+      </main>
+    </div>
+  );
+}
+
+function AdminJobTable({ title, jobs, empty }: { title: string; jobs: AdminJob[]; empty: string }) {
+  return (
+    <section className="admin-table-panel">
+      <div className="panel-heading panel-heading--compact">
+        <div>
+          <span>Queue monitor</span>
+          <h2>{title}</h2>
+        </div>
+        <strong>{jobs.length}</strong>
+      </div>
+      {jobs.length === 0 ? (
+        <p className="admin-empty">{empty}</p>
+      ) : (
+        <div className="admin-table-wrap">
+          <table className="admin-table">
+            <thead>
+              <tr>
+                <th>Status</th>
+                <th>Workflow</th>
+                <th>User</th>
+                <th>Queued</th>
+                <th>Run</th>
+                <th>Total</th>
+                <th>Tokens</th>
+                <th>Request</th>
+              </tr>
+            </thead>
+            <tbody>
+              {jobs.map((job) => (
+                <tr key={`${title}-${job.requestId}`}>
+                  <td>
+                    <span className={`admin-status admin-status--${job.status}`}>{job.status}</span>
+                  </td>
+                  <td>{job.workflowId}</td>
+                  <td>{job.userId}</td>
+                  <td>{formatPolicyWindow(job.queuedMs)}</td>
+                  <td>{formatPolicyWindow(job.latencyMs ?? job.runningMs)}</td>
+                  <td>{formatPolicyWindow(job.totalMs ?? job.queuedMs + job.runningMs)}</td>
+                  <td>{job.totalTokens ?? '-'}</td>
+                  <td title={job.requestId}>{job.requestId.slice(0, 8)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -176,6 +394,10 @@ function MarkdownRenderer({ content }: { content: string }) {
 }
 
 export function App() {
+  if (window.location.pathname.startsWith('/admin')) {
+    return <AdminDashboard />;
+  }
+
   const [activeMode, setActiveMode] = useState<ComposerMode>('ask');
   const [activeWorkflowId, setActiveWorkflowId] = useState(workflowCards[0].id);
   const [prompt, setPrompt] = useState(workflowCards[0].samplePrompt);

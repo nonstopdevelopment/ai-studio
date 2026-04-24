@@ -24,6 +24,9 @@ spec:
           envFrom:
             - configMapRef:
                 name: ai-studio-config
+            - secretRef:
+                name: ai-studio-admin
+                optional: true
           readinessProbe:
             httpGet:
               path: /api/health

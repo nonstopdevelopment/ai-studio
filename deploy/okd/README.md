@@ -20,6 +20,7 @@ Use this path when you do not want to build locally or push image layers over yo
 
 ```bash
 oc project nonstopdev-ai
+oc create secret generic ai-studio-admin --from-literal=ADMIN_TOKEN="$(openssl rand -hex 24)"
 oc apply -k deploy/okd
 oc start-build ai-studio --follow
 oc rollout status deploy/ai-studio
@@ -27,6 +28,16 @@ oc get route ai-studio
 ```
 
 The `BuildConfig` builds the local `Dockerfile` inside OKD and writes the result to the internal `ai-studio:latest` ImageStreamTag.
+
+## Private Admin Dashboard
+
+The private monitor is available at `/admin` on the app route. It requires the `ADMIN_TOKEN` stored in the `ai-studio-admin` Secret.
+
+Retrieve the token when you need to log in:
+
+```bash
+oc get secret ai-studio-admin -o jsonpath='{.data.ADMIN_TOKEN}' | base64 -d
+```
 
 ## Optional Local Build And Push
 

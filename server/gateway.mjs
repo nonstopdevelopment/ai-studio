@@ -12,6 +12,7 @@ const redisUrl = process.env.REDIS_URL || '';
 const keyPrefix = process.env.REDIS_KEY_PREFIX || 'ai-studio';
 const sessionTtlSeconds = readInt('SESSION_TTL_SECONDS', 24 * 60 * 60);
 const artifactTtlSeconds = readInt('ARTIFACT_TTL_SECONDS', 24 * 60 * 60);
+const adminToken = process.env.ADMIN_TOKEN || '';
 
 const policy = {
   modelName: process.env.VLLM_MODEL || 'gemma-4',
@@ -37,6 +38,8 @@ const state = {
   perUserWindows: new Map(),
   sessions: new Map(),
   artifacts: new Map(),
+  activeJobs: new Map(),
+  recentRequests: [],
 };
 
 let sharedStore = createMemorySharedStore();
@@ -64,6 +67,10 @@ const server = createServer(async (request, response) => {
 
     if (request.method === 'GET' && url.pathname === '/api/health') {
       return sendJson(response, 200, { ok: true, status: getStatus() });
+    }
+
+    if (request.method === 'GET' && url.pathname === '/api/admin/metrics') {
+      return handleAdminMetrics(request, response);
     }
 
     if (request.method === 'GET' && url.pathname.startsWith('/api/artifacts/')) {
@@ -169,11 +176,18 @@ function processQueue() {
 
   state.activeRequests += 1;
   state.lastStartAt = Date.now();
+  job.startedAt = state.lastStartAt;
+  state.activeJobs.set(job.requestId, job);
   incrementInflight(job.userId);
 
   runJob(job)
     .catch((error) => {
       state.failedRequests += 1;
+      recordRequest(job, {
+        status: 'failed',
+        statusCode: error.statusCode || 500,
+        error: error.publicCode || error.name || 'generation_failed',
+      });
       console.error(`[gateway] request ${job.requestId} failed`, error);
       if (!job.response.headersSent) {
         const publicError = normalizePublicError(error);
@@ -187,6 +201,7 @@ function processQueue() {
     })
     .finally(() => {
       state.activeRequests = Math.max(0, state.activeRequests - 1);
+      state.activeJobs.delete(job.requestId);
       decrementInflight(job.userId);
       job.resolve();
       processQueue();
@@ -222,6 +237,14 @@ async function runJob(job) {
     const artifact = job.body.createArtifact ? await createArtifact(job, result.text) : null;
     await sharedStore.appendSessionMessage(job.body.sessionId, { role: 'user', content: job.body.prompt });
     await sharedStore.appendSessionMessage(job.body.sessionId, { role: 'assistant', content: result.text });
+    const completedAt = Date.now();
+    recordRequest(job, {
+      status: 'completed',
+      statusCode: 200,
+      completedAt,
+      outputChars: result.text.length,
+      totalTokens: result.usage?.total_tokens ?? result.usage?.totalTokens ?? null,
+    });
 
     return sendJson(job.response, 200, {
       requestId: job.requestId,
@@ -230,7 +253,7 @@ async function runJob(job) {
       model: policy.modelName,
       workflowId: job.body.workflowId,
       queuedMs: startedAt - job.queuedAt,
-      latencyMs: Date.now() - startedAt,
+      latencyMs: completedAt - startedAt,
       text: result.text,
       artifact,
       memory: await sharedStore.getSessionSummary(job.body.sessionId),
@@ -243,6 +266,107 @@ async function runJob(job) {
     }
     clearTimeout(timeout);
   }
+}
+
+function handleAdminMetrics(request, response) {
+  if (!adminToken) {
+    return sendJson(response, 404, { error: 'admin_disabled' });
+  }
+
+  if (!isAdminRequest(request)) {
+    return sendJson(response, 401, { error: 'unauthorized' });
+  }
+
+  return sendJson(response, 200, getAdminMetrics());
+}
+
+function isAdminRequest(request) {
+  const auth = request.headers.authorization;
+  const bearerToken =
+    typeof auth === 'string' && auth.toLowerCase().startsWith('bearer ') ? auth.slice(7).trim() : '';
+  const headerToken = typeof request.headers['x-admin-token'] === 'string' ? request.headers['x-admin-token'] : '';
+  return bearerToken === adminToken || headerToken === adminToken;
+}
+
+function getAdminMetrics() {
+  const recent = state.recentRequests.slice(-80).reverse();
+  const completed = state.recentRequests.filter((request) => request.status === 'completed');
+  const failed = state.recentRequests.filter((request) => request.status === 'failed');
+  const latencies = completed.map((request) => request.latencyMs).filter((value) => typeof value === 'number');
+
+  return {
+    generatedAt: new Date().toISOString(),
+    status: getStatus(),
+    throughput: {
+      recentCompleted: completed.length,
+      recentFailed: failed.length,
+      avgLatencyMs: average(latencies),
+      p95LatencyMs: percentile(latencies, 0.95),
+      maxLatencyMs: latencies.length ? Math.max(...latencies) : 0,
+    },
+    activeJobs: [...state.activeJobs.values()].map((job) => summarizeJob(job, 'active')),
+    queuedJobs: state.queue.map((job) => summarizeJob(job, 'queued')),
+    recentRequests: recent,
+  };
+}
+
+function summarizeJob(job, status) {
+  const now = Date.now();
+  return {
+    requestId: job.requestId,
+    userId: anonymizeId(job.userId),
+    sessionId: anonymizeId(job.body.sessionId),
+    workflowId: job.body.workflowId,
+    outputFormat: job.body.outputFormat,
+    createArtifact: job.body.createArtifact,
+    status,
+    queuedAt: new Date(job.queuedAt).toISOString(),
+    startedAt: job.startedAt ? new Date(job.startedAt).toISOString() : null,
+    queuedMs: (job.startedAt ?? now) - job.queuedAt,
+    runningMs: job.startedAt ? now - job.startedAt : 0,
+    promptChars: job.body.prompt.length,
+  };
+}
+
+function recordRequest(job, details) {
+  const completedAt = details.completedAt ?? Date.now();
+  state.recentRequests.push({
+    ...summarizeJob(job, details.status),
+    completedAt: new Date(completedAt).toISOString(),
+    latencyMs: job.startedAt ? completedAt - job.startedAt : 0,
+    totalMs: completedAt - job.queuedAt,
+    statusCode: details.statusCode,
+    error: details.error ?? null,
+    outputChars: details.outputChars ?? 0,
+    totalTokens: details.totalTokens ?? null,
+  });
+  state.recentRequests = state.recentRequests.slice(-200);
+}
+
+function anonymizeId(value) {
+  const text = String(value ?? 'unknown');
+  if (text.length <= 12) {
+    return text;
+  }
+
+  return `${text.slice(0, 6)}...${text.slice(-4)}`;
+}
+
+function average(values) {
+  if (values.length === 0) {
+    return 0;
+  }
+
+  return Math.round(values.reduce((sum, value) => sum + value, 0) / values.length);
+}
+
+function percentile(values, pct) {
+  if (values.length === 0) {
+    return 0;
+  }
+
+  const sorted = [...values].sort((left, right) => left - right);
+  return sorted[Math.min(sorted.length - 1, Math.floor((sorted.length - 1) * pct))];
 }
 
 async function generateWithMock(job, signal) {
