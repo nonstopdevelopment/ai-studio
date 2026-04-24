@@ -279,13 +279,13 @@ async function generateWithVllm(job, signal) {
     },
     body: JSON.stringify({
       model: policy.modelName,
-      max_tokens: policy.maxOutputTokens,
+      max_tokens: getMaxOutputTokens(job),
       temperature: 0.4,
       messages: [
         {
           role: 'system',
           content:
-            'You are Tampa Devs AI Studio, running on a community private cloud. Be concise, practical, and format answers for people testing a local AI studio. When asked for artifacts, produce clean Markdown with headings, lists, and concrete next steps.',
+            'You are Tampa Devs AI Studio, running on a community private cloud. For normal chat, answer directly in 1-3 short paragraphs unless the user asks for depth. For generated artifacts, produce clean Markdown with headings, lists, and concrete next steps.',
         },
         ...(await sharedStore.getSessionMessages(job.body.sessionId)),
         {
@@ -310,6 +310,18 @@ async function generateWithVllm(job, signal) {
     text: payload?.choices?.[0]?.message?.content ?? '',
     usage: payload?.usage ?? null,
   };
+}
+
+function getMaxOutputTokens(job) {
+  if (job.body.createArtifact) {
+    return policy.maxOutputTokens;
+  }
+
+  if (job.body.workflowId === 'general-chat') {
+    return Math.min(policy.maxOutputTokens, 256);
+  }
+
+  return Math.min(policy.maxOutputTokens, 512);
 }
 
 async function createArtifact(job, text) {

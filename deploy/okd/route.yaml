@@ -2,6 +2,8 @@ apiVersion: route.openshift.io/v1
 kind: Route
 metadata:
   name: ai-studio
+  annotations:
+    haproxy.router.openshift.io/timeout: 180s
 spec:
   to:
     kind: Service

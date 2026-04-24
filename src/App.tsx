@@ -321,7 +321,17 @@ export function App() {
         }),
       });
 
-      const body = await response.json();
+      const responseText = await response.text();
+      let body;
+      try {
+        body = responseText ? JSON.parse(responseText) : {};
+      } catch {
+        throw new Error(
+          responseText
+            ? `Gateway returned a non-JSON response: ${responseText.slice(0, 160)}`
+            : 'Gateway returned an empty response. The route or model request may have timed out.'
+        );
+      }
       if (!response.ok) {
         const retryAfter =
           typeof body.retryAfterMs === 'number'
