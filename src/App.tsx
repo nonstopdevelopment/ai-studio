@@ -187,7 +187,7 @@ export function App() {
   const [copyState, setCopyState] = useState<'idle' | 'copied'>('idle');
   const [sessionId, setSessionId] = useState(createTabSessionId);
   const [createArtifact, setCreateArtifact] = useState(false);
-  const [outputFormat, setOutputFormat] = useState<OutputFormat>('markdown');
+  const [outputFormat, setOutputFormat] = useState<OutputFormat>('text');
   const [generatedArtifact, setGeneratedArtifact] = useState<GeneratedArtifact | null>(null);
 
   const activeWorkflow = useMemo(
@@ -243,6 +243,7 @@ export function App() {
     setActiveWorkflowId(workflow.id);
     setPrompt(workflow.samplePrompt);
     setCreateArtifact(workflow.mode === 'draft');
+    setOutputFormat(workflow.mode === 'draft' ? 'markdown' : 'text');
     setArtifact(workflow.artifact);
     setStatusText(`${workflow.title} loaded.`);
   }
@@ -258,6 +259,7 @@ export function App() {
     setActiveWorkflowId('deployment-brief');
     setPrompt(artifactDemoPrompt);
     setCreateArtifact(true);
+    setOutputFormat('markdown');
     setStatusText('Artifact demo prompt loaded.');
   }
 
