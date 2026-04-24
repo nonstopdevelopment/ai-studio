@@ -201,8 +201,12 @@ async function runJob(job) {
   const timeout = setTimeout(() => controller.abort(), policy.requestTimeoutMs);
   let releaseClusterSlot = null;
 
-  job.request.on('close', () => {
-    if (!job.response.writableEnded) {
+  let responseFinished = false;
+  job.response.on('finish', () => {
+    responseFinished = true;
+  });
+  job.response.on('close', () => {
+    if (!responseFinished) {
       controller.abort();
     }
   });
