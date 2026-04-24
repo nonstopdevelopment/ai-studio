@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: ai-studio
+  labels:
+    app: ai-studio
+spec:
+  selector:
+    app: ai-studio
+  ports:
+    - name: http
+      port: 8787
+      targetPort: http

@@ -1,0 +1,43 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ai-studio-valkey
+  labels:
+    app: ai-studio-valkey
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ai-studio-valkey
+  template:
+    metadata:
+      labels:
+        app: ai-studio-valkey
+    spec:
+      containers:
+        - name: valkey
+          image: valkey/valkey:8-alpine
+          ports:
+            - name: redis
+              containerPort: 6379
+          resources:
+            requests:
+              cpu: 50m
+              memory: 96Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ai-studio-valkey
+  labels:
+    app: ai-studio-valkey
+spec:
+  selector:
+    app: ai-studio-valkey
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: redis

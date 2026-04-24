@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ai-studio-config
+data:
+  GATEWAY_MODE: live
+  VLLM_BASE_URL: http://gemma4-27b-vllm.kuberay-system.svc.cluster.local:8000/v1
+  VLLM_MODEL: gemma-4-26B-A4B-it
+  GATEWAY_MAX_CONCURRENT: "1"
+  GATEWAY_MAX_QUEUE_DEPTH: "10"
+  GATEWAY_PER_USER_CONCURRENT: "1"
+  GATEWAY_PER_USER_RPM: "6"
+  GATEWAY_MIN_INTERVAL_MS: "2500"
+  GATEWAY_REQUEST_TIMEOUT_MS: "120000"
+  GATEWAY_MAX_OUTPUT_TOKENS: "768"
+  GATEWAY_MAX_PROMPT_CHARS: "8000"
+  SESSION_TTL_SECONDS: "86400"
+  ARTIFACT_TTL_SECONDS: "86400"
+  ARTIFACT_DIR: /data/artifacts
+  REDIS_URL: redis://ai-studio-valkey:6379
+  REDIS_KEY_PREFIX: ai-studio
+  REQUIRE_REDIS: "true"

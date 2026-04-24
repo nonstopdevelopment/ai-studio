@@ -1,0 +1,32 @@
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: ai-studio
+  labels:
+    app: ai-studio
+spec:
+  lookupPolicy:
+    local: false
+---
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: ai-studio
+  labels:
+    app: ai-studio
+spec:
+  source:
+    type: Git
+    git:
+      uri: https://github.com/nonstopdevelopment/ai-studio.git
+      ref: main
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: Dockerfile
+  output:
+    to:
+      kind: ImageStreamTag
+      name: ai-studio:latest
+  triggers:
+    - type: ConfigChange
