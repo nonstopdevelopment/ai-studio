@@ -118,34 +118,34 @@ type AdminMetrics = {
 
 const examplePrompts = [
   {
-    icon: '📅',
-    title: 'What events are happening this week?',
-    prompt: 'What Tampa Bay developer or startup events should I pay attention to this week?',
+    icon: '💡',
+    title: 'Brainstorm an idea',
+    prompt: 'Help me brainstorm a simple project idea I could build this week.',
   },
   {
-    icon: '👥',
-    title: 'How do I join Tampa Devs?',
-    prompt: 'How do I join Tampa Devs and start meeting people in the community?',
+    icon: '📝',
+    title: 'Draft a message',
+    prompt: 'Help me draft a clear message asking for feedback on a project.',
   },
   {
-    icon: '🏆',
-    title: 'Tell me about BayHacks',
-    prompt: 'Tell me about BayHacks and what someone should know before registering.',
+    icon: '🔍',
+    title: 'Explain a concept',
+    prompt: 'Explain containers and Kubernetes in plain language.',
   },
   {
-    icon: '🤝',
-    title: 'How do I become a sponsor?',
-    prompt: 'How should a company think about sponsoring Tampa Devs without sounding salesy?',
+    icon: '🧭',
+    title: 'Make a plan',
+    prompt: 'Turn this rough idea into a simple step-by-step plan.',
   },
   {
-    icon: '💼',
-    title: 'Tell me about the Talent Network',
-    prompt: 'Explain the Tampa Devs Talent Network and who it helps.',
+    icon: '🛠️',
+    title: 'Debug an issue',
+    prompt: 'Help me think through why a web app might be returning a gateway error.',
   },
   {
-    icon: '🧑‍💻',
-    title: 'How does mentorship work?',
-    prompt: 'How could mentorship work for Tampa Bay developers who are early in their careers?',
+    icon: '✨',
+    title: 'Improve writing',
+    prompt: 'Make this paragraph clearer and more direct.',
   },
 ];
 
@@ -1068,7 +1068,7 @@ export function App() {
             ) : !hasStartedChat ? (
               <div className="thread-starter">
                 <h1>How can I help?</h1>
-                <p>Ask a question, pick an example, or start a new thread from the sidebar.</p>
+                <p>Ask a question, pick a starter, or continue one of your saved chats.</p>
                 <div className="example-grid example-grid--compact">
                   {examplePrompts.slice(0, 4).map((example) => (
                     <button
@@ -1170,7 +1170,7 @@ export function App() {
                   void submitPrompt();
                 }
               }}
-              placeholder="Ask about events, groups, sponsorships, mentorship..."
+              placeholder="Ask anything"
               disabled={!isSignedIn || isGenerating}
               rows={3}
             />
