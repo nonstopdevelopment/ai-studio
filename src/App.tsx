@@ -540,6 +540,7 @@ export function App() {
   const [authProfile, setAuthProfile] = useState<AuthProfile | null>(null);
   const [authStatus, setAuthStatus] = useState('Guest workspace');
   const [showComposerTools, setShowComposerTools] = useState(false);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const threadEndRef = useRef<HTMLDivElement | null>(null);
 
   const activeWorkflow = useMemo(
@@ -744,6 +745,7 @@ export function App() {
     setOutputFormat('text');
     setCreateArtifact(false);
     setShowComposerTools(false);
+    setIsSidebarOpen(false);
     setStatusText('Started a new chat with fresh context.');
   }
 
@@ -767,6 +769,7 @@ export function App() {
     setSessionId(nextThread.sessionId);
     setMessages(cleanThreadMessages(nextThread.messages ?? []));
     setGeneratedArtifact(null);
+    setIsSidebarOpen(false);
     setStatusText(`${nextThread.title} loaded.`);
   }
 
@@ -952,7 +955,15 @@ export function App() {
   const draftWorkflow = workflowCards.find((workflow) => workflow.id === 'deployment-brief') ?? workflowCards[0];
 
   return (
-    <div className="workspace-app">
+    <div className={isSidebarOpen ? 'workspace-app sidebar-open' : 'workspace-app'}>
+      {isSidebarOpen ? (
+        <button
+          className="sidebar-scrim"
+          type="button"
+          aria-label="Close chat history"
+          onClick={() => setIsSidebarOpen(false)}
+        />
+      ) : null}
       <aside className="workspace-sidebar">
         <div className="workspace-brand">
           <span className="workspace-logo">
@@ -1023,7 +1034,15 @@ export function App() {
       <section className="workspace-main">
         <header className="workspace-topbar">
           <div>
-            <button className="menu-button" type="button" aria-label="Open workspace menu">☰</button>
+            <button
+              className="menu-button"
+              type="button"
+              aria-label={isSidebarOpen ? 'Close chat history' : 'Open chat history'}
+              aria-expanded={isSidebarOpen}
+              onClick={() => setIsSidebarOpen((current) => !current)}
+            >
+              ☰
+            </button>
             <strong>Tampa Devs AI</strong>
           </div>
           <div className="workspace-status">
