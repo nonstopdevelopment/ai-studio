@@ -23,7 +23,7 @@ const authConfig = {
   userInfoUrl: process.env.TAMPADEV_AUTH_USERINFO_URL || '',
   introspectionUrl: process.env.TAMPADEV_AUTH_INTROSPECTION_URL || '',
   clientId: process.env.TAMPADEV_AUTH_CLIENT_ID || '',
-  scopes: process.env.TAMPADEV_AUTH_SCOPES || 'openid profile email',
+  scopes: process.env.TAMPADEV_AUTH_SCOPES || 'read:user user:email',
 };
 
 const policy = {
@@ -914,16 +914,17 @@ async function validateBearerToken(token) {
 }
 
 function normalizeAuthProfile(profile) {
-  const id = sanitizeId(profile.sub || profile.id || profile.user_id || profile.username || profile.email);
+  const data = profile?.data && typeof profile.data === 'object' ? profile.data : profile;
+  const id = sanitizeId(data.sub || data.id || data.user_id || data.username || data.email);
   if (!id) {
     throw new Error('missing_user_id');
   }
 
   return {
     id,
-    name: String(profile.name || profile.preferred_username || profile.username || profile.email || 'Tampa.dev member'),
-    email: String(profile.email || ''),
-    avatarUrl: String(profile.picture || profile.avatar_url || ''),
+    name: String(data.name || data.preferred_username || data.username || data.email || 'Tampa.dev member'),
+    email: String(data.email || ''),
+    avatarUrl: String(data.picture || data.avatar_url || data.avatarUrl || ''),
     authenticated: true,
   };
 }

@@ -130,8 +130,8 @@ AUTH_MODE=optional
 TAMPADEV_AUTH_CLIENT_ID=your-oauth-client-id
 TAMPADEV_AUTH_AUTHORIZE_URL=https://tampa.dev/oauth/authorize
 TAMPADEV_AUTH_TOKEN_URL=https://tampa.dev/oauth/token
-TAMPADEV_AUTH_USERINFO_URL=the-documented-userinfo-or-profile-endpoint
-TAMPADEV_AUTH_SCOPES="openid profile email"
+TAMPADEV_AUTH_USERINFO_URL=https://api.tampa.dev/v1/me
+TAMPADEV_AUTH_SCOPES="read:user user:email"
 THREAD_TTL_SECONDS=2592000
 ```
 
