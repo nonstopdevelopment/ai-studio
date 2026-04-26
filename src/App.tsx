@@ -59,8 +59,25 @@ type ChatThread = {
   title: string;
   subtitle: string;
   sessionId: string;
-  messages: Message[];
+  messages?: Message[];
   updatedAt: string;
+};
+
+type AuthConfig = {
+  enabled: boolean;
+  authMode: 'optional' | 'required' | string;
+  authorizeUrl: string;
+  clientId: string;
+  scopes: string;
+};
+
+type AuthProfile = {
+  authenticated: boolean;
+  id: string;
+  name: string;
+  email: string;
+  avatarUrl: string;
+  authMode: string;
 };
 
 type AdminJob = {
@@ -188,6 +205,9 @@ const seedThreads: ChatThread[] = [
     updatedAt: 'Last week',
   },
 ];
+
+const authTokenStorageKey = 'ai-studio-auth-token';
+const authVerifierStorageKey = 'ai-studio-auth-verifier';
 
 function StudioButton({ children, disabled = false, onClick, variant = 'primary' }: StudioButtonProps) {
   return (
@@ -398,6 +418,65 @@ function createTabSessionId() {
   return `session-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+function getAuthToken() {
+  return window.sessionStorage.getItem(authTokenStorageKey) ?? '';
+}
+
+function getAuthHeaders(authToken: string, fallbackSessionId: string): Record<string, string> {
+  if (authToken) {
+    return { authorization: `Bearer ${authToken}` };
+  }
+
+  return { 'x-user-id': fallbackSessionId };
+}
+
+function mapServerThread(thread: ChatThread): ChatThread {
+  return {
+    id: thread.id,
+    title: thread.title,
+    subtitle: thread.subtitle || 'Saved chat',
+    sessionId: thread.sessionId,
+    messages: thread.messages?.length ? thread.messages : [welcomeMessage],
+    updatedAt: formatThreadTimestamp(thread.updatedAt),
+  };
+}
+
+function formatThreadTimestamp(value: string) {
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) {
+    return value || 'Just now';
+  }
+
+  const seconds = Math.max(1, Math.round((Date.now() - timestamp) / 1000));
+  if (seconds < 60) {
+    return 'Just now';
+  }
+  if (seconds < 3600) {
+    return `${Math.round(seconds / 60)} min ago`;
+  }
+  if (seconds < 86400) {
+    return `${Math.round(seconds / 3600)} hr ago`;
+  }
+
+  return `${Math.round(seconds / 86400)} days ago`;
+}
+
+function createCodeVerifier() {
+  const bytes = new Uint8Array(32);
+  window.crypto.getRandomValues(bytes);
+  return base64Url(bytes);
+}
+
+async function createCodeChallenge(verifier: string) {
+  const encoded = new TextEncoder().encode(verifier);
+  const digest = await window.crypto.subtle.digest('SHA-256', encoded);
+  return base64Url(new Uint8Array(digest));
+}
+
+function base64Url(bytes: Uint8Array) {
+  return window.btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
 function formatClientError(error: unknown) {
   if (error instanceof Error) {
     return `${error.name}: ${error.message}`;
@@ -499,6 +578,10 @@ export function App() {
   const [createArtifact, setCreateArtifact] = useState(false);
   const [outputFormat, setOutputFormat] = useState<OutputFormat>('text');
   const [generatedArtifact, setGeneratedArtifact] = useState<GeneratedArtifact | null>(null);
+  const [authConfig, setAuthConfig] = useState<AuthConfig | null>(null);
+  const [authToken, setAuthToken] = useState(getAuthToken);
+  const [authProfile, setAuthProfile] = useState<AuthProfile | null>(null);
+  const [authStatus, setAuthStatus] = useState('Guest workspace');
 
   const activeWorkflow = useMemo(
     () => workflowCards.find((workflow) => workflow.id === activeWorkflowId) ?? workflowCards[0],
@@ -539,8 +622,133 @@ export function App() {
     };
   }, []);
 
+  useEffect(() => {
+    let canceled = false;
+
+    async function loadAuth() {
+      try {
+        const response = await fetch('/api/auth/config');
+        const config = (await response.json()) as AuthConfig;
+        if (canceled) {
+          return;
+        }
+
+        setAuthConfig(config);
+
+        const callbackUrl = new URL(window.location.href);
+        const code = callbackUrl.searchParams.get('code');
+        if (config.enabled && code) {
+          const verifier = window.sessionStorage.getItem(authVerifierStorageKey) ?? '';
+          const tokenResponse = await fetch('/api/auth/token', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              code,
+              codeVerifier: verifier,
+              redirectUri: `${window.location.origin}/`,
+            }),
+          });
+          const tokenBody = await tokenResponse.json();
+          if (!tokenResponse.ok) {
+            throw new Error(tokenBody.message ?? tokenBody.error ?? 'Tampa.dev sign-in failed.');
+          }
+
+          window.sessionStorage.setItem(authTokenStorageKey, tokenBody.accessToken);
+          window.sessionStorage.removeItem(authVerifierStorageKey);
+          setAuthToken(tokenBody.accessToken);
+          window.history.replaceState({}, document.title, window.location.pathname);
+          setAuthStatus('Signed in with Tampa.dev.');
+          return;
+        }
+
+        if (!config.enabled) {
+          setAuthStatus('Guest workspace. Tampa.dev auth is not configured yet.');
+        }
+      } catch (error) {
+        if (!canceled) {
+          setAuthStatus(formatClientError(error));
+        }
+      }
+    }
+
+    void loadAuth();
+    return () => {
+      canceled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let canceled = false;
+
+    async function loadWorkspace() {
+      try {
+        const profileResponse = await fetch('/api/me', {
+          headers: getAuthHeaders(authToken, sessionId),
+        });
+        const profile = (await profileResponse.json()) as AuthProfile;
+        if (!profileResponse.ok) {
+          throw new Error((profile as unknown as { message?: string }).message ?? 'Could not load workspace profile.');
+        }
+
+        if (canceled) {
+          return;
+        }
+
+        setAuthProfile(profile);
+        setAuthStatus(profile.authenticated ? `Signed in as ${profile.name}.` : 'Guest workspace.');
+
+        const threadResponse = await fetch('/api/threads', {
+          headers: getAuthHeaders(authToken, sessionId),
+        });
+        const threadBody = await threadResponse.json();
+        if (threadResponse.ok && Array.isArray(threadBody.threads) && threadBody.threads.length > 0 && !canceled) {
+          setThreads(threadBody.threads.map(mapServerThread));
+        }
+      } catch (error) {
+        if (!canceled) {
+          setAuthStatus(formatClientError(error));
+        }
+      }
+    }
+
+    void loadWorkspace();
+    return () => {
+      canceled = true;
+    };
+  }, [authToken, sessionId]);
+
   function applyGatewayStatus(nextStatus: GatewayStatus) {
     setGatewayStatus(nextStatus);
+  }
+
+  async function signIn() {
+    if (!authConfig?.enabled) {
+      setAuthStatus('Tampa.dev auth is waiting on OAuth client configuration.');
+      return;
+    }
+
+    const verifier = createCodeVerifier();
+    const challenge = await createCodeChallenge(verifier);
+    window.sessionStorage.setItem(authVerifierStorageKey, verifier);
+
+    const authorizeUrl = new URL(authConfig.authorizeUrl);
+    authorizeUrl.searchParams.set('response_type', 'code');
+    authorizeUrl.searchParams.set('client_id', authConfig.clientId);
+    authorizeUrl.searchParams.set('redirect_uri', `${window.location.origin}/`);
+    authorizeUrl.searchParams.set('scope', authConfig.scopes);
+    authorizeUrl.searchParams.set('code_challenge', challenge);
+    authorizeUrl.searchParams.set('code_challenge_method', 'S256');
+    window.location.assign(authorizeUrl.toString());
+  }
+
+  function signOut() {
+    window.sessionStorage.removeItem(authTokenStorageKey);
+    window.sessionStorage.removeItem(authVerifierStorageKey);
+    setAuthToken('');
+    setAuthProfile(null);
+    setThreads(seedThreads);
+    startNewChat();
+    setAuthStatus('Signed out. Using guest workspace.');
   }
 
   function loadWorkflow(workflow: WorkflowCard) {
@@ -579,12 +787,27 @@ export function App() {
     setStatusText('Started a new chat with fresh context.');
   }
 
-  function loadThread(thread: ChatThread) {
-    setActiveThreadId(thread.id);
-    setSessionId(thread.sessionId);
-    setMessages(thread.messages);
+  async function loadThread(thread: ChatThread) {
+    let nextThread = thread;
+    if (authToken) {
+      try {
+        const response = await fetch(`/api/threads/${thread.id}`, {
+          headers: getAuthHeaders(authToken, sessionId),
+        });
+        const body = await response.json();
+        if (response.ok && body.thread) {
+          nextThread = mapServerThread(body.thread);
+        }
+      } catch {
+        nextThread = thread;
+      }
+    }
+
+    setActiveThreadId(nextThread.id);
+    setSessionId(nextThread.sessionId);
+    setMessages(nextThread.messages?.length ? nextThread.messages : [welcomeMessage]);
     setGeneratedArtifact(null);
-    setStatusText(`${thread.title} loaded.`);
+    setStatusText(`${nextThread.title} loaded.`);
   }
 
   function updateThread(nextMessages: Message[], nextTitle?: string) {
@@ -652,11 +875,12 @@ export function App() {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
-          'x-user-id': sessionId,
+          ...getAuthHeaders(authToken, sessionId),
         },
         body: JSON.stringify({
           prompt: trimmedPrompt,
           sessionId,
+          threadId: activeThreadId,
           workflowId: activeWorkflow.id,
           workflowTitle: activeWorkflow.title,
           sampleResponse: activeWorkflow.sampleResponse,
@@ -756,7 +980,7 @@ export function App() {
                 key={thread.id}
                 className={thread.id === activeThreadId ? 'recent-thread is-active' : 'recent-thread'}
                 type="button"
-                onClick={() => loadThread(thread)}
+                onClick={() => void loadThread(thread)}
               >
                 <span className="recent-thread__icon">●</span>
                 <span>
@@ -769,10 +993,21 @@ export function App() {
         </section>
 
         <section className="identity-card">
-          <div className="identity-avatar">J</div>
-          <div>
-            <strong>Guest workspace</strong>
-            <small>Tampa.dev auth ready</small>
+          <div className="identity-avatar">
+            {authProfile?.name?.slice(0, 1).toUpperCase() || (authProfile?.authenticated ? 'T' : 'G')}
+          </div>
+          <div className="identity-copy">
+            <strong>{authProfile?.authenticated ? authProfile.name : 'Guest workspace'}</strong>
+            <small>{authStatus}</small>
+            {authProfile?.authenticated ? (
+              <button type="button" onClick={signOut}>
+                Sign out
+              </button>
+            ) : (
+              <button type="button" onClick={() => void signIn()} disabled={!authConfig?.enabled}>
+                Sign in with Tampa.dev
+              </button>
+            )}
           </div>
         </section>
       </aside>

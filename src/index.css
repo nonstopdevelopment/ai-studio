@@ -197,7 +197,7 @@ button {
 
 .identity-card {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 12px;
   min-height: 94px;
   padding: 18px 24px;
@@ -224,6 +224,27 @@ button {
 .identity-card small {
   margin-top: 5px;
   color: var(--color-faint);
+}
+
+.identity-copy {
+  min-width: 0;
+}
+
+.identity-copy button {
+  margin-top: 10px;
+  border: 0;
+  background: transparent;
+  color: var(--color-coral);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 800;
+  padding: 0;
+}
+
+.identity-copy button:disabled {
+  color: var(--color-faint);
+  cursor: not-allowed;
 }
 
 .workspace-main {

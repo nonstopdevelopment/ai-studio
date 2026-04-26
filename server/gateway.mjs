@@ -12,7 +12,19 @@ const redisUrl = process.env.REDIS_URL || '';
 const keyPrefix = process.env.REDIS_KEY_PREFIX || 'ai-studio';
 const sessionTtlSeconds = readInt('SESSION_TTL_SECONDS', 24 * 60 * 60);
 const artifactTtlSeconds = readInt('ARTIFACT_TTL_SECONDS', 24 * 60 * 60);
+const threadTtlSeconds = readInt('THREAD_TTL_SECONDS', 30 * 24 * 60 * 60);
 const adminToken = process.env.ADMIN_TOKEN || '';
+
+const authConfig = {
+  mode: process.env.AUTH_MODE || 'optional',
+  issuer: process.env.TAMPADEV_AUTH_ISSUER || '',
+  authorizeUrl: process.env.TAMPADEV_AUTH_AUTHORIZE_URL || 'https://tampa.dev/oauth/authorize',
+  tokenUrl: process.env.TAMPADEV_AUTH_TOKEN_URL || 'https://tampa.dev/oauth/token',
+  userInfoUrl: process.env.TAMPADEV_AUTH_USERINFO_URL || '',
+  introspectionUrl: process.env.TAMPADEV_AUTH_INTROSPECTION_URL || '',
+  clientId: process.env.TAMPADEV_AUTH_CLIENT_ID || '',
+  scopes: process.env.TAMPADEV_AUTH_SCOPES || 'openid profile email',
+};
 
 const policy = {
   modelName: process.env.VLLM_MODEL || 'gemma-4',
@@ -61,6 +73,30 @@ const server = createServer(async (request, response) => {
       return sendJson(response, 200, getStatus());
     }
 
+    if (request.method === 'GET' && url.pathname === '/api/auth/config') {
+      return sendJson(response, 200, getPublicAuthConfig());
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/auth/token') {
+      return handleTokenExchange(request, response);
+    }
+
+    if (request.method === 'GET' && url.pathname === '/api/me') {
+      return handleMe(request, response);
+    }
+
+    if (request.method === 'GET' && url.pathname === '/api/threads') {
+      return handleListThreads(request, response);
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/threads') {
+      return handleCreateThread(request, response);
+    }
+
+    if (request.method === 'GET' && url.pathname.startsWith('/api/threads/')) {
+      return handleGetThread(request, response, url.pathname);
+    }
+
     if (request.method === 'POST' && url.pathname === '/api/generate') {
       return handleGenerate(request, response);
     }
@@ -102,7 +138,12 @@ server.listen(readInt('PORT', 8787), '0.0.0.0', () => {
 });
 
 async function handleGenerate(request, response) {
-  const userId = getUserId(request);
+  const identity = await resolveIdentity(request);
+  if (!identity.ok) {
+    return sendJson(response, identity.statusCode, identity.body);
+  }
+
+  const userId = identity.user.id;
   const body = await readJsonBody(request);
   const prompt = String(body.prompt ?? '').trim();
 
@@ -132,6 +173,7 @@ async function handleGenerate(request, response) {
 
   const requestId = randomUUID();
   const sessionId = sanitizeId(body.sessionId) || randomUUID();
+  const threadId = sanitizeId(body.threadId) || '';
   const queuedAt = Date.now();
 
   return new Promise((resolve) => {
@@ -150,6 +192,7 @@ async function handleGenerate(request, response) {
         sampleResponse: String(body.sampleResponse ?? ''),
         createArtifact: Boolean(body.createArtifact),
         outputFormat: normalizeOutputFormat(body.outputFormat),
+        threadId,
       },
     };
 
@@ -237,6 +280,24 @@ async function runJob(job) {
     const artifact = job.body.createArtifact ? await createArtifact(job, result.text) : null;
     await sharedStore.appendSessionMessage(job.body.sessionId, { role: 'user', content: job.body.prompt });
     await sharedStore.appendSessionMessage(job.body.sessionId, { role: 'assistant', content: result.text });
+    if (job.body.threadId) {
+      await sharedStore.saveThreadMessage(job.userId, job.body.threadId, {
+        id: `user-${job.requestId}`,
+        role: 'user',
+        content: job.body.prompt,
+      });
+      await sharedStore.saveThreadMessage(job.userId, job.body.threadId, {
+        id: `assistant-${job.requestId}`,
+        role: 'assistant',
+        content: result.text,
+      });
+      await sharedStore.touchThread(job.userId, {
+        id: job.body.threadId,
+        title: job.body.prompt.slice(0, 52) || job.body.workflowTitle,
+        subtitle: job.body.workflowTitle,
+        sessionId: job.body.sessionId,
+      });
+    }
     const completedAt = Date.now();
     recordRequest(job, {
       status: 'completed',
@@ -266,6 +327,116 @@ async function runJob(job) {
     }
     clearTimeout(timeout);
   }
+}
+
+async function handleTokenExchange(request, response) {
+  if (!isAuthConfigured()) {
+    return sendJson(response, 404, {
+      error: 'auth_not_configured',
+      message: 'Tampa.dev OAuth is not configured for this environment.',
+    });
+  }
+
+  const body = await readJsonBody(request);
+  const code = String(body.code ?? '').trim();
+  const codeVerifier = String(body.codeVerifier ?? '').trim();
+  const redirectUri = String(body.redirectUri ?? '').trim();
+
+  if (!code || !codeVerifier || !redirectUri) {
+    return sendJson(response, 400, { error: 'invalid_auth_callback' });
+  }
+
+  const tokenResponse = await fetch(authConfig.tokenUrl, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/x-www-form-urlencoded',
+      accept: 'application/json',
+    },
+    body: new URLSearchParams({
+      grant_type: 'authorization_code',
+      client_id: authConfig.clientId,
+      code,
+      code_verifier: codeVerifier,
+      redirect_uri: redirectUri,
+    }),
+  });
+
+  const tokenText = await tokenResponse.text();
+  let tokenBody = safeJsonParse(tokenText) ?? {};
+
+  if (!tokenResponse.ok) {
+    return sendJson(response, 502, {
+      error: 'token_exchange_failed',
+      message: tokenBody.error_description || tokenBody.error || 'The Tampa.dev token endpoint rejected the callback.',
+    });
+  }
+
+  return sendJson(response, 200, {
+    accessToken: tokenBody.access_token,
+    tokenType: tokenBody.token_type || 'Bearer',
+    expiresIn: tokenBody.expires_in ?? null,
+    scope: tokenBody.scope ?? authConfig.scopes,
+  });
+}
+
+async function handleMe(request, response) {
+  const identity = await resolveIdentity(request);
+  if (!identity.ok) {
+    return sendJson(response, identity.statusCode, identity.body);
+  }
+
+  return sendJson(response, 200, {
+    authenticated: identity.user.authenticated,
+    id: identity.user.id,
+    name: identity.user.name,
+    email: identity.user.email,
+    avatarUrl: identity.user.avatarUrl,
+    authMode: authConfig.mode,
+  });
+}
+
+async function handleListThreads(request, response) {
+  const identity = await resolveIdentity(request);
+  if (!identity.ok) {
+    return sendJson(response, identity.statusCode, identity.body);
+  }
+
+  return sendJson(response, 200, {
+    ownerId: identity.user.id,
+    authenticated: identity.user.authenticated,
+    threads: await sharedStore.listThreads(identity.user.id),
+  });
+}
+
+async function handleCreateThread(request, response) {
+  const identity = await resolveIdentity(request);
+  if (!identity.ok) {
+    return sendJson(response, identity.statusCode, identity.body);
+  }
+
+  const body = await readJsonBody(request);
+  const thread = await sharedStore.createThread(identity.user.id, {
+    title: String(body.title ?? 'New workspace chat').slice(0, 80),
+    subtitle: String(body.subtitle ?? 'Just now').slice(0, 80),
+    sessionId: sanitizeId(body.sessionId) || randomUUID(),
+  });
+
+  return sendJson(response, 201, { thread });
+}
+
+async function handleGetThread(request, response, pathname) {
+  const identity = await resolveIdentity(request);
+  if (!identity.ok) {
+    return sendJson(response, identity.statusCode, identity.body);
+  }
+
+  const threadId = sanitizeId(pathname.split('/').pop() ?? '');
+  const thread = await sharedStore.getThread(identity.user.id, threadId);
+  if (!thread) {
+    return sendJson(response, 404, { error: 'thread_not_found' });
+  }
+
+  return sendJson(response, 200, { thread });
 }
 
 function handleAdminMetrics(request, response) {
@@ -411,7 +582,7 @@ async function generateWithVllm(job, signal) {
           content:
             'You are Tampa Devs AI Studio, running on a community private cloud. For normal chat, answer directly in 1-3 short paragraphs unless the user asks for depth. For generated artifacts, produce clean Markdown with headings, lists, and concrete next steps.',
         },
-        ...(await sharedStore.getSessionMessages(job.body.sessionId)),
+        ...(await getConversationHistory(job)),
         {
           role: 'user',
           content: `${job.body.prompt}\n\n${getFormatInstruction(job.body.outputFormat)}`,
@@ -434,6 +605,17 @@ async function generateWithVllm(job, signal) {
     text: payload?.choices?.[0]?.message?.content ?? '',
     usage: payload?.usage ?? null,
   };
+}
+
+async function getConversationHistory(job) {
+  if (job.body.threadId) {
+    const threadMessages = await sharedStore.getThreadMessages(job.userId, job.body.threadId);
+    if (threadMessages.length > 0) {
+      return threadMessages.slice(-8);
+    }
+  }
+
+  return sharedStore.getSessionMessages(job.body.sessionId);
 }
 
 function getMaxOutputTokens(job) {
@@ -619,6 +801,143 @@ function getStatus() {
   };
 }
 
+function getPublicAuthConfig() {
+  return {
+    enabled: isAuthConfigured(),
+    authMode: authConfig.mode,
+    authorizeUrl: authConfig.authorizeUrl,
+    clientId: authConfig.clientId,
+    scopes: authConfig.scopes,
+  };
+}
+
+function isAuthConfigured() {
+  return Boolean(authConfig.clientId && authConfig.authorizeUrl && authConfig.tokenUrl);
+}
+
+async function resolveIdentity(request) {
+  const bearerToken = getBearerToken(request);
+
+  if (bearerToken && isAuthConfigured()) {
+    try {
+      const profile = await validateBearerToken(bearerToken);
+      return { ok: true, user: normalizeAuthProfile(profile) };
+    } catch (error) {
+      console.error('[gateway] auth validation failed', error);
+      return {
+        ok: false,
+        statusCode: 401,
+        body: {
+          error: 'invalid_token',
+          message: 'The Tampa.dev session could not be validated.',
+        },
+      };
+    }
+  }
+
+  if (authConfig.mode === 'required') {
+    return {
+      ok: false,
+      statusCode: 401,
+      body: {
+        error: 'auth_required',
+        message: 'Sign in with Tampa.dev before using this workspace.',
+      },
+    };
+  }
+
+  return {
+    ok: true,
+    user: {
+      id: getFallbackUserId(request),
+      name: 'Guest workspace',
+      email: '',
+      avatarUrl: '',
+      authenticated: false,
+    },
+  };
+}
+
+function getBearerToken(request) {
+  const auth = request.headers.authorization;
+  if (typeof auth === 'string' && auth.toLowerCase().startsWith('bearer ')) {
+    return auth.slice(7).trim();
+  }
+
+  return '';
+}
+
+async function validateBearerToken(token) {
+  if (authConfig.userInfoUrl) {
+    const response = await fetch(authConfig.userInfoUrl, {
+      headers: { authorization: `Bearer ${token}`, accept: 'application/json' },
+    });
+    if (!response.ok) {
+      throw new Error(`userinfo_failed_${response.status}`);
+    }
+    return response.json();
+  }
+
+  if (authConfig.introspectionUrl) {
+    const response = await fetch(authConfig.introspectionUrl, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/x-www-form-urlencoded',
+        accept: 'application/json',
+      },
+      body: new URLSearchParams({
+        token,
+        client_id: authConfig.clientId,
+      }),
+    });
+    const body = await response.json();
+    if (!response.ok || body.active === false) {
+      throw new Error('token_inactive');
+    }
+    return body;
+  }
+
+  const claims = decodeJwtPayload(token);
+  if (!claims) {
+    throw new Error('token_claims_unreadable');
+  }
+
+  if (claims.exp && Date.now() / 1000 > Number(claims.exp)) {
+    throw new Error('token_expired');
+  }
+
+  if (authConfig.issuer && claims.iss && claims.iss !== authConfig.issuer) {
+    throw new Error('issuer_mismatch');
+  }
+
+  return claims;
+}
+
+function normalizeAuthProfile(profile) {
+  const id = sanitizeId(profile.sub || profile.id || profile.user_id || profile.username || profile.email);
+  if (!id) {
+    throw new Error('missing_user_id');
+  }
+
+  return {
+    id,
+    name: String(profile.name || profile.preferred_username || profile.username || profile.email || 'Tampa.dev member'),
+    email: String(profile.email || ''),
+    avatarUrl: String(profile.picture || profile.avatar_url || ''),
+    authenticated: true,
+  };
+}
+
+function decodeJwtPayload(token) {
+  const payload = token.split('.')[1];
+  if (!payload) {
+    return null;
+  }
+
+  const padded = payload.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(payload.length / 4) * 4, '=');
+  return safeJsonParse(Buffer.from(padded, 'base64').toString('utf8'));
+}
+
 async function waitForClusterSlot(job, signal) {
   while (!signal.aborted) {
     const release = await sharedStore.acquireClusterSlot(job.requestId, policy.maxConcurrentClusterRequests);
@@ -679,6 +998,82 @@ function createMemorySharedStore() {
         storage: 'memory',
       };
     },
+    async listThreads(userId) {
+      return getMemoryUserThreads(userId).map((thread) => ({
+        ...thread,
+        messages: undefined,
+      }));
+    },
+    async createThread(userId, thread) {
+      const now = new Date().toISOString();
+      const nextThread = {
+        id: sanitizeId(thread.id) || randomUUID(),
+        title: thread.title || 'New workspace chat',
+        subtitle: thread.subtitle || 'Just now',
+        sessionId: sanitizeId(thread.sessionId) || randomUUID(),
+        updatedAt: now,
+        messages: [],
+      };
+      const threads = getMemoryUserThreads(userId);
+      state.sessions.set(getThreadIndexKey(userId), [nextThread, ...threads].slice(0, 30));
+      return nextThread;
+    },
+    async getThread(userId, threadId) {
+      return getMemoryUserThreads(userId).find((thread) => thread.id === threadId) ?? null;
+    },
+    async getThreadMessages(userId, threadId) {
+      const thread = getMemoryUserThreads(userId).find((item) => item.id === threadId);
+      return (thread?.messages ?? []).slice(-8).map((message) => ({
+        role: message.role === 'assistant' ? 'assistant' : 'user',
+        content: String(message.content ?? ''),
+      }));
+    },
+    async touchThread(userId, thread) {
+      const threads = getMemoryUserThreads(userId);
+      const existing = threads.find((item) => item.id === thread.id);
+      const now = new Date().toISOString();
+      const nextThread = {
+        ...(existing ?? {}),
+        id: sanitizeId(thread.id) || randomUUID(),
+        title: thread.title || existing?.title || 'New workspace chat',
+        subtitle: thread.subtitle || existing?.subtitle || 'Chat',
+        sessionId: sanitizeId(thread.sessionId) || existing?.sessionId || randomUUID(),
+        updatedAt: now,
+        messages: existing?.messages ?? [],
+      };
+      state.sessions.set(
+        getThreadIndexKey(userId),
+        [nextThread, ...threads.filter((item) => item.id !== nextThread.id)].slice(0, 30)
+      );
+      return nextThread;
+    },
+    async saveThreadMessage(userId, threadId, message) {
+      const threads = getMemoryUserThreads(userId);
+      const existing = threads.find((thread) => thread.id === threadId);
+      const nextThread = existing ?? {
+        id: threadId,
+        title: 'New workspace chat',
+        subtitle: 'Chat',
+        sessionId: randomUUID(),
+        updatedAt: new Date().toISOString(),
+        messages: [],
+      };
+      nextThread.messages = [
+        ...(nextThread.messages ?? []),
+        {
+          id: message.id || randomUUID(),
+          role: message.role === 'assistant' ? 'assistant' : 'user',
+          content: String(message.content ?? ''),
+          state: 'done',
+          at: new Date().toISOString(),
+        },
+      ].slice(-40);
+      nextThread.updatedAt = new Date().toISOString();
+      state.sessions.set(
+        getThreadIndexKey(userId),
+        [nextThread, ...threads.filter((thread) => thread.id !== threadId)].slice(0, 30)
+      );
+    },
     async checkRateLimit(userId, now) {
       const windowStart = now - 60_000;
       const recent = (state.perUserWindows.get(userId) ?? []).filter((timestamp) => timestamp > windowStart);
@@ -738,6 +1133,80 @@ function createRedisSharedStore(client) {
         messageCount: await client.lLen(key('session', safeSessionId)),
         storage: 'redis',
       };
+    },
+    async listThreads(userId) {
+      const threadIds = await client.zRange(key('user', sanitizeId(userId), 'threads'), 0, 29, { REV: true });
+      const rows = await Promise.all(threadIds.map((threadId) => client.get(key('thread', sanitizeId(userId), threadId))));
+      return rows
+        .map((row) => safeJsonParse(row))
+        .filter(Boolean)
+        .map((thread) => ({ ...thread, messages: undefined }));
+    },
+    async createThread(userId, thread) {
+      const threadId = sanitizeId(thread.id) || randomUUID();
+      const nextThread = {
+        id: threadId,
+        title: thread.title || 'New workspace chat',
+        subtitle: thread.subtitle || 'Just now',
+        sessionId: sanitizeId(thread.sessionId) || randomUUID(),
+        updatedAt: new Date().toISOString(),
+        messages: [],
+      };
+      await saveRedisThread(client, key, userId, nextThread);
+      return nextThread;
+    },
+    async getThread(userId, threadId) {
+      return safeJsonParse(await client.get(key('thread', sanitizeId(userId), sanitizeId(threadId))));
+    },
+    async getThreadMessages(userId, threadId) {
+      const thread = safeJsonParse(await client.get(key('thread', sanitizeId(userId), sanitizeId(threadId))));
+      return (thread?.messages ?? []).slice(-8).map((message) => ({
+        role: message.role === 'assistant' ? 'assistant' : 'user',
+        content: String(message.content ?? ''),
+      }));
+    },
+    async touchThread(userId, thread) {
+      const safeUserId = sanitizeId(userId);
+      const threadId = sanitizeId(thread.id) || randomUUID();
+      const current = safeJsonParse(await client.get(key('thread', safeUserId, threadId))) ?? {};
+      const nextThread = {
+        ...current,
+        id: threadId,
+        title: thread.title || current.title || 'New workspace chat',
+        subtitle: thread.subtitle || current.subtitle || 'Chat',
+        sessionId: sanitizeId(thread.sessionId) || current.sessionId || randomUUID(),
+        updatedAt: new Date().toISOString(),
+        messages: current.messages ?? [],
+      };
+      await saveRedisThread(client, key, safeUserId, nextThread);
+      return nextThread;
+    },
+    async saveThreadMessage(userId, threadId, message) {
+      const safeUserId = sanitizeId(userId);
+      const safeThreadId = sanitizeId(threadId);
+      const current = safeJsonParse(await client.get(key('thread', safeUserId, safeThreadId))) ?? {
+        id: safeThreadId,
+        title: 'New workspace chat',
+        subtitle: 'Chat',
+        sessionId: randomUUID(),
+        updatedAt: new Date().toISOString(),
+        messages: [],
+      };
+      const nextThread = {
+        ...current,
+        updatedAt: new Date().toISOString(),
+        messages: [
+          ...(current.messages ?? []),
+          {
+            id: message.id || randomUUID(),
+            role: message.role === 'assistant' ? 'assistant' : 'user',
+            content: String(message.content ?? ''),
+            state: 'done',
+            at: new Date().toISOString(),
+          },
+        ].slice(-40),
+      };
+      await saveRedisThread(client, key, safeUserId, nextThread);
     },
     async checkRateLimit(userId, now) {
       const bucket = Math.floor(now / 60_000);
@@ -817,6 +1286,29 @@ function createRedisSharedStore(client) {
   };
 }
 
+function getThreadIndexKey(userId) {
+  return `threads:${sanitizeId(userId)}`;
+}
+
+function getMemoryUserThreads(userId) {
+  return state.sessions.get(getThreadIndexKey(userId)) ?? [];
+}
+
+async function saveRedisThread(client, key, userId, thread) {
+  const safeUserId = sanitizeId(userId);
+  const safeThreadId = sanitizeId(thread.id);
+  const serialized = JSON.stringify({ ...thread, id: safeThreadId });
+  const threadKey = key('thread', safeUserId, safeThreadId);
+  const indexKey = key('user', safeUserId, 'threads');
+
+  await client
+    .multi()
+    .set(threadKey, serialized, { EX: threadTtlSeconds })
+    .zAdd(indexKey, [{ score: Date.now(), value: safeThreadId }])
+    .expire(indexKey, threadTtlSeconds)
+    .exec();
+}
+
 function safeJsonParse(value) {
   if (!value) {
     return null;
@@ -855,7 +1347,7 @@ function decrementInflight(userId) {
   }
 }
 
-function getUserId(request) {
+function getFallbackUserId(request) {
   const forwardedUser = request.headers['x-user-id'];
   if (typeof forwardedUser === 'string' && forwardedUser.trim()) {
     return forwardedUser.trim().slice(0, 120);

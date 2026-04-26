@@ -20,3 +20,8 @@ data:
   REDIS_URL: redis://ai-studio-valkey:6379
   REDIS_KEY_PREFIX: ai-studio
   REQUIRE_REDIS: "true"
+  AUTH_MODE: optional
+  TAMPADEV_AUTH_AUTHORIZE_URL: https://tampa.dev/oauth/authorize
+  TAMPADEV_AUTH_TOKEN_URL: https://tampa.dev/oauth/token
+  TAMPADEV_AUTH_SCOPES: openid profile email
+  THREAD_TTL_SECONDS: "2592000"

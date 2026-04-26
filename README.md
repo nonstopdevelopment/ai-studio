@@ -107,13 +107,35 @@ For OKD with more than one gateway replica, replace these local-only stores:
 
 ## User Workspace Plan
 
-The current workspace shell keeps threads in the browser and sends a generated `sessionId` to the gateway. When Tampa.dev authentication is connected, use the authenticated Tampa.dev user as the durable workspace owner:
+The workspace shell supports guest threads today and is scaffolded for Tampa.dev-authenticated user workspaces. Guests still get a generated `sessionId`; signed-in users should use the Tampa.dev access token as the durable workspace owner:
 
 - Browser obtains a Tampa.dev access token through OAuth 2.1 with PKCE.
-- Browser sends `Authorization: Bearer <access_token>` to the AI Studio gateway.
-- Gateway validates the token, derives a stable `userId`, and uses that for rate limits, thread ownership, and artifact access.
-- Threads should move from browser-only state into shared storage keyed by `{userId, threadId}`.
-- Anonymous sessions can remain as a fallback for public demos.
+- Browser sends `Authorization: Bearer <access_token>` to the AI Studio gateway. Guests continue to send a generated fallback ID.
+- Gateway validates the token, derives a stable `userId`, and uses that for rate limits, thread ownership, model memory, and artifact access.
+- Threads are stored in shared storage keyed by `{userId, threadId}` so a user can reopen a chat and continue with the prior context.
+- Anonymous sessions remain as a fallback for public demos while `AUTH_MODE=optional`.
+
+Auth-related endpoints:
+
+- `GET /api/auth/config` returns public OAuth client settings for the browser.
+- `POST /api/auth/token` exchanges a PKCE authorization code for a Tampa.dev access token.
+- `GET /api/me` returns the current user or guest workspace profile.
+- `GET /api/threads` lists the current user's saved threads.
+- `GET /api/threads/:threadId` returns one thread with messages.
+
+Auth-related environment:
+
+```bash
+AUTH_MODE=optional
+TAMPADEV_AUTH_CLIENT_ID=your-oauth-client-id
+TAMPADEV_AUTH_AUTHORIZE_URL=https://tampa.dev/oauth/authorize
+TAMPADEV_AUTH_TOKEN_URL=https://tampa.dev/oauth/token
+TAMPADEV_AUTH_USERINFO_URL=the-documented-userinfo-or-profile-endpoint
+TAMPADEV_AUTH_SCOPES="openid profile email"
+THREAD_TTL_SECONDS=2592000
+```
+
+Use `AUTH_MODE=required` after the OAuth client and token validation endpoint are confirmed. If `TAMPADEV_AUTH_USERINFO_URL` or `TAMPADEV_AUTH_INTROSPECTION_URL` is configured, the gateway validates bearer tokens through that endpoint. Without either one, the scaffold can decode JWT claims for early integration testing, but that should not be the final production validation mode.
 
 ## Gateway Environment
 
