@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useMemo, useState } from 'react';
+import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { clusterPolicy, formatPolicyWindow } from './lib/cluster-policy';
 import {
   workflowCards,
@@ -116,13 +116,6 @@ type AdminMetrics = {
   recentRequests: AdminJob[];
 };
 
-const welcomeMessage: Message = {
-  id: 'welcome',
-  role: 'assistant',
-  content: 'Ask a question to chat with the private-cloud model, or switch to Draft Files when you want a generated Markdown, text, or JSON artifact.',
-  state: 'done',
-};
-
 const examplePrompts = [
   {
     icon: '📅',
@@ -153,57 +146,6 @@ const examplePrompts = [
     icon: '🧑‍💻',
     title: 'How does mentorship work?',
     prompt: 'How could mentorship work for Tampa Bay developers who are early in their careers?',
-  },
-];
-
-const seedThreads: ChatThread[] = [
-  {
-    id: 'seed-events',
-    title: 'Tampa Bay events May 2025',
-    subtitle: 'Example thread',
-    sessionId: 'seed-events',
-    messages: [
-      welcomeMessage,
-      {
-        id: 'seed-events-user',
-        role: 'user',
-        content: 'What events are happening this week?',
-        state: 'done',
-      },
-    ],
-    updatedAt: 'Yesterday',
-  },
-  {
-    id: 'seed-bayhacks',
-    title: 'BayHacks registration info',
-    subtitle: 'Example thread',
-    sessionId: 'seed-bayhacks',
-    messages: [
-      welcomeMessage,
-      {
-        id: 'seed-bayhacks-user',
-        role: 'user',
-        content: 'Tell me about BayHacks registration.',
-        state: 'done',
-      },
-    ],
-    updatedAt: '2 days ago',
-  },
-  {
-    id: 'seed-sponsor',
-    title: 'Sponsorship packages',
-    subtitle: 'Example thread',
-    sessionId: 'seed-sponsor',
-    messages: [
-      welcomeMessage,
-      {
-        id: 'seed-sponsor-user',
-        role: 'user',
-        content: 'How do I become a sponsor?',
-        state: 'done',
-      },
-    ],
-    updatedAt: 'Last week',
   },
 ];
 
@@ -437,7 +379,7 @@ function mapServerThread(thread: ChatThread): ChatThread {
     title: thread.title,
     subtitle: thread.subtitle || 'Saved chat',
     sessionId: thread.sessionId,
-    messages: thread.messages?.length ? thread.messages : [welcomeMessage],
+    messages: thread.messages ?? [],
     updatedAt: formatThreadTimestamp(thread.updatedAt),
   };
 }
@@ -568,11 +510,11 @@ export function App() {
 
   const [activeMode, setActiveMode] = useState<ComposerMode>('ask');
   const [activeWorkflowId, setActiveWorkflowId] = useState(workflowCards[0].id);
-  const [prompt, setPrompt] = useState(workflowCards[0].samplePrompt);
-  const [messages, setMessages] = useState<Message[]>([welcomeMessage]);
-  const [threads, setThreads] = useState<ChatThread[]>(seedThreads);
+  const [prompt, setPrompt] = useState('');
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [threads, setThreads] = useState<ChatThread[]>([]);
   const [activeThreadId, setActiveThreadId] = useState('new-thread');
-  const [statusText, setStatusText] = useState('Gateway status has not loaded yet.');
+  const [, setStatusText] = useState('');
   const [gatewayStatus, setGatewayStatus] = useState<GatewayStatus | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [sessionId, setSessionId] = useState(createTabSessionId);
@@ -583,6 +525,8 @@ export function App() {
   const [authToken, setAuthToken] = useState(getAuthToken);
   const [authProfile, setAuthProfile] = useState<AuthProfile | null>(null);
   const [authStatus, setAuthStatus] = useState('Guest workspace');
+  const [showComposerTools, setShowComposerTools] = useState(false);
+  const threadEndRef = useRef<HTMLDivElement | null>(null);
 
   const activeWorkflow = useMemo(
     () => workflowCards.find((workflow) => workflow.id === activeWorkflowId) ?? workflowCards[0],
@@ -702,8 +646,8 @@ export function App() {
           headers: getAuthHeaders(authToken, sessionId),
         });
         const threadBody = await threadResponse.json();
-        if (threadResponse.ok && Array.isArray(threadBody.threads) && threadBody.threads.length > 0 && !canceled) {
-          setThreads(threadBody.threads.map(mapServerThread));
+        if (threadResponse.ok && Array.isArray(threadBody.threads) && !canceled) {
+          setThreads(profile.authenticated ? threadBody.threads.map(mapServerThread) : []);
         }
       } catch (error) {
         if (!canceled) {
@@ -716,7 +660,11 @@ export function App() {
     return () => {
       canceled = true;
     };
-  }, [authToken, sessionId]);
+  }, [authToken]);
+
+  useEffect(() => {
+    threadEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  }, [messages, isGenerating]);
 
   function applyGatewayStatus(nextStatus: GatewayStatus) {
     setGatewayStatus(nextStatus);
@@ -747,44 +695,41 @@ export function App() {
     window.sessionStorage.removeItem(authVerifierStorageKey);
     setAuthToken('');
     setAuthProfile(null);
-    setThreads(seedThreads);
-    startNewChat();
+    setThreads([]);
+    setMessages([]);
+    setPrompt('');
+    setActiveThreadId('new-thread');
+    setSessionId(createTabSessionId());
     setAuthStatus('Signed out. Using guest workspace.');
   }
 
   function loadWorkflow(workflow: WorkflowCard) {
     setActiveMode(workflow.mode);
     setActiveWorkflowId(workflow.id);
-    setPrompt(workflow.samplePrompt);
+    setPrompt(workflow.mode === 'draft' ? workflow.samplePrompt : '');
     setCreateArtifact(workflow.mode === 'draft');
     setOutputFormat(workflow.mode === 'draft' ? 'markdown' : 'text');
     setStatusText(`${workflow.title} loaded.`);
   }
 
   function startNewChat() {
+    if (!isSignedIn) {
+      setAuthStatus('Sign in with Tampa.dev to start a private chat.');
+      return;
+    }
+
     const nextSessionId = createTabSessionId();
     const nextThreadId = `thread-${Date.now().toString(36)}`;
-    const nextMessages = [{ ...welcomeMessage, id: `welcome-${Date.now()}` }];
     setSessionId(nextSessionId);
     setActiveThreadId(nextThreadId);
-    setMessages(nextMessages);
-    setThreads((current) => [
-      {
-        id: nextThreadId,
-        title: 'New workspace chat',
-        subtitle: 'Just now',
-        sessionId: nextSessionId,
-        messages: nextMessages,
-        updatedAt: 'Just now',
-      },
-      ...current.slice(0, 7),
-    ]);
+    setMessages([]);
     setGeneratedArtifact(null);
     setPrompt('');
     setActiveMode('ask');
     setActiveWorkflowId('general-chat');
     setOutputFormat('text');
     setCreateArtifact(false);
+    setShowComposerTools(false);
     setStatusText('Started a new chat with fresh context.');
   }
 
@@ -806,14 +751,16 @@ export function App() {
 
     setActiveThreadId(nextThread.id);
     setSessionId(nextThread.sessionId);
-    setMessages(nextThread.messages?.length ? nextThread.messages : [welcomeMessage]);
+    setMessages(nextThread.messages ?? []);
     setGeneratedArtifact(null);
     setStatusText(`${nextThread.title} loaded.`);
   }
 
-  function updateThread(nextMessages: Message[], nextTitle?: string) {
-    const existingThread = threads.find((thread) => thread.id === activeThreadId);
-    const resolvedThreadId = existingThread ? activeThreadId : `thread-${Date.now().toString(36)}`;
+  function updateThread(nextMessages: Message[], nextTitle?: string, threadIdOverride?: string) {
+    const requestedThreadId = threadIdOverride || activeThreadId;
+    const existingThread = threads.find((thread) => thread.id === requestedThreadId);
+    const resolvedThreadId =
+      existingThread || requestedThreadId !== 'new-thread' ? requestedThreadId : `thread-${Date.now().toString(36)}`;
     const fallbackTitle =
       nextMessages.find((message) => message.role === 'user')?.content.slice(0, 44) || 'New workspace chat';
 
@@ -834,7 +781,37 @@ export function App() {
     });
   }
 
+  async function deleteThread(threadId: string) {
+    const nextThreads = threads.filter((thread) => thread.id !== threadId);
+    setThreads(nextThreads);
+
+    if (authToken) {
+      try {
+        await fetch(`/api/threads/${threadId}`, {
+          method: 'DELETE',
+          headers: getAuthHeaders(authToken, sessionId),
+        });
+      } catch {
+        setStatusText('Could not delete the saved thread from the gateway.');
+      }
+    }
+
+    if (threadId === activeThreadId) {
+      const nextThread = nextThreads[0];
+      if (nextThread) {
+        await loadThread(nextThread);
+      } else {
+        startNewChat();
+      }
+    }
+  }
+
   async function submitPrompt() {
+    if (!isSignedIn) {
+      setAuthStatus('Sign in with Tampa.dev to continue.');
+      return;
+    }
+
     const trimmedPrompt = prompt.trim();
     if (!trimmedPrompt) {
       setStatusText('Add a prompt before starting a generation.');
@@ -847,9 +824,11 @@ export function App() {
     }
 
     const stamp = Date.now();
+    const requestThreadId = activeThreadId === 'new-thread' ? `thread-${stamp.toString(36)}` : activeThreadId;
     const userMessageId = `user-${stamp}`;
     const assistantMessageId = `assistant-${stamp}`;
     setIsGenerating(true);
+    setPrompt('');
     setStatusText('Submitted to gateway.');
     setMessages((current) => {
       const nextMessages = [
@@ -867,7 +846,7 @@ export function App() {
           state: 'streaming' as const,
         },
       ];
-      updateThread(nextMessages, trimmedPrompt.slice(0, 44));
+      updateThread(nextMessages, trimmedPrompt.slice(0, 44), requestThreadId);
       return nextMessages;
     });
 
@@ -881,7 +860,7 @@ export function App() {
         body: JSON.stringify({
           prompt: trimmedPrompt,
           sessionId,
-          threadId: activeThreadId,
+          threadId: requestThreadId,
           workflowId: activeWorkflow.id,
           workflowTitle: activeWorkflow.title,
           sampleResponse: activeWorkflow.sampleResponse,
@@ -953,6 +932,7 @@ export function App() {
   }
 
   const hasStartedChat = messages.some((message) => message.role === 'user');
+  const isSignedIn = Boolean(authProfile?.authenticated && authToken);
   const askWorkflows = workflowCards.filter((workflow) => workflow.mode === 'ask');
   const draftWorkflow = workflowCards.find((workflow) => workflow.id === 'deployment-brief') ?? workflowCards[0];
 
@@ -968,28 +948,40 @@ export function App() {
           </strong>
         </div>
 
-        <button className="new-chat-button" type="button" onClick={startNewChat} disabled={isGenerating}>
+        <button className="new-chat-button" type="button" onClick={startNewChat} disabled={isGenerating || !isSignedIn}>
           <span>+</span>
           New Chat
         </button>
 
         <section className="workspace-recent">
-          <span>Recent</span>
+          <span>Your Chats</span>
           <div className="recent-thread-list">
-            {threads.map((thread) => (
-              <button
-                key={thread.id}
-                className={thread.id === activeThreadId ? 'recent-thread is-active' : 'recent-thread'}
-                type="button"
-                onClick={() => void loadThread(thread)}
-              >
-                <span className="recent-thread__icon">●</span>
-                <span>
-                  <strong>{thread.title}</strong>
-                  <small>{thread.updatedAt}</small>
-                </span>
-              </button>
-            ))}
+            {isSignedIn && threads.length === 0 ? <p className="recent-empty">No saved chats yet.</p> : null}
+            {!isSignedIn ? <p className="recent-empty">Sign in to see your private chat history.</p> : null}
+            {isSignedIn
+              ? threads.map((thread) => (
+                  <div
+                    key={thread.id}
+                    className={thread.id === activeThreadId ? 'recent-thread is-active' : 'recent-thread'}
+                  >
+                    <button type="button" onClick={() => void loadThread(thread)}>
+                      <span className="recent-thread__icon">●</span>
+                      <span>
+                        <strong>{thread.title}</strong>
+                        <small>{thread.updatedAt}</small>
+                      </span>
+                    </button>
+                    <button
+                      className="recent-thread__delete"
+                      type="button"
+                      aria-label={`Delete ${thread.title}`}
+                      onClick={() => void deleteThread(thread.id)}
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))
+              : null}
           </div>
         </section>
 
@@ -998,8 +990,8 @@ export function App() {
             {authProfile?.name?.slice(0, 1).toUpperCase() || (authProfile?.authenticated ? 'T' : 'G')}
           </div>
           <div className="identity-copy">
-            <strong>{authProfile?.authenticated ? authProfile.name : 'Guest workspace'}</strong>
-            <small>{authStatus}</small>
+            <strong>{authProfile?.authenticated ? authProfile.name : 'Private workspace'}</strong>
+            <small>{authProfile?.authenticated ? 'Signed in with Tampa.dev' : 'Sign in to use the studio'}</small>
             {authProfile?.authenticated ? (
               <button type="button" onClick={signOut}>
                 Sign out
@@ -1027,103 +1019,113 @@ export function App() {
         </header>
 
         <main className="workspace-chat">
-          {!hasStartedChat ? (
-            <section className="workspace-hero">
-              <span className="hero-logo">
-                <img src="/ontampa-pirate.png" alt="" />
-              </span>
-              <h1>
-                Tampa<span>.dev</span> AI
-              </h1>
-              <p>Your workspace for the Tampa Bay tech community. Ask questions, keep threads, and draft useful files.</p>
-              <div className="example-grid">
-                {examplePrompts.map((example) => (
-                  <button
-                    key={example.title}
-                    className="example-tile"
-                    type="button"
-                    onClick={() => {
-                      setPrompt(example.prompt);
-                      setActiveMode('ask');
-                      setActiveWorkflowId(askWorkflows[0]?.id ?? 'general-chat');
-                      setOutputFormat('text');
-                      setCreateArtifact(false);
-                    }}
-                  >
-                    <span>{example.icon}</span>
-                    <strong>{example.title}</strong>
-                  </button>
-                ))}
+          <section className="workspace-thread" aria-label="Conversation thread">
+            {!isSignedIn ? (
+              <div className="signin-panel">
+                <span className="hero-logo">
+                  <img src="/ontampa-pirate.png" alt="" />
+                </span>
+                <h1>Private Tampa.dev AI</h1>
+                <p>Sign in with Tampa.dev to use the community AI studio and keep your chats in your own workspace.</p>
+                <StudioButton onClick={() => void signIn()} disabled={!authConfig?.enabled}>
+                  Sign in with Tampa.dev
+                </StudioButton>
               </div>
-            </section>
-          ) : (
-            <section className="workspace-thread" aria-label="Conversation thread">
-              {messages.map((message) => (
-                <article key={message.id} className={`workspace-message workspace-message--${message.role}`}>
-                  <div className="workspace-message__avatar">{message.role === 'assistant' ? 'AI' : 'You'}</div>
-                  <div className="workspace-message__body">
-                    <span>{message.role === 'assistant' ? 'Tampa.dev AI' : 'You'}</span>
-                    {message.state === 'streaming' ? (
-                      <div className="thinking-card workspace-thinking" role="status" aria-live="polite">
-                        <div className="thinking-orbit">
-                          <span />
-                          <span />
-                          <span />
-                        </div>
-                        <p>Thinking through the local model...</p>
+            ) : !hasStartedChat ? (
+              <div className="thread-starter">
+                <h1>How can I help?</h1>
+                <p>Ask a question, pick an example, or start a new thread from the sidebar.</p>
+                <div className="example-grid example-grid--compact">
+                  {examplePrompts.slice(0, 4).map((example) => (
+                    <button
+                      key={example.title}
+                      className="example-tile"
+                      type="button"
+                      onClick={() => {
+                        setPrompt(example.prompt);
+                        setActiveMode('ask');
+                        setActiveWorkflowId(askWorkflows[0]?.id ?? 'general-chat');
+                        setOutputFormat('text');
+                        setCreateArtifact(false);
+                      }}
+                    >
+                      <span>{example.icon}</span>
+                      <strong>{example.title}</strong>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
+            {messages.map((message) => (
+              <article key={message.id} className={`workspace-message workspace-message--${message.role}`}>
+                <div className="workspace-message__avatar">{message.role === 'assistant' ? 'AI' : 'You'}</div>
+                <div className="workspace-message__body">
+                  <span>{message.role === 'assistant' ? 'Tampa.dev AI' : 'You'}</span>
+                  {message.state === 'streaming' ? (
+                    <div className="thinking-card workspace-thinking" role="status" aria-live="polite">
+                      <div className="thinking-orbit">
+                        <span />
+                        <span />
+                        <span />
                       </div>
-                    ) : outputFormat === 'markdown' && message.role === 'assistant' ? (
-                      <MarkdownRenderer content={message.content} />
-                    ) : (
-                      <p>{message.content}</p>
-                    )}
-                  </div>
-                </article>
-              ))}
-            </section>
-          )}
+                      <p>Thinking through the local model...</p>
+                    </div>
+                  ) : outputFormat === 'markdown' && message.role === 'assistant' ? (
+                    <MarkdownRenderer content={message.content} />
+                  ) : (
+                    <p>{message.content}</p>
+                  )}
+                </div>
+              </article>
+            ))}
+            <div ref={threadEndRef} />
+          </section>
         </main>
 
         <footer className="workspace-composer-shell">
-          <div className="workspace-tools">
-            <button
-              className={activeMode === 'ask' ? 'tool-chip is-active' : 'tool-chip'}
-              type="button"
-              onClick={() => loadWorkflow(askWorkflows[0] ?? workflowCards[0])}
-            >
-              Chat
-            </button>
-            <button
-              className={activeMode === 'draft' ? 'tool-chip is-active' : 'tool-chip'}
-              type="button"
-              onClick={() => loadWorkflow(draftWorkflow)}
-            >
-              Draft file
-            </button>
-            <label className="format-select workspace-format">
-              <span>Format</span>
-              <select value={outputFormat} onChange={(event) => setOutputFormat(event.target.value as OutputFormat)}>
-                <option value="text">Text</option>
-                <option value="markdown">Markdown</option>
-                <option value="json">JSON</option>
-              </select>
-            </label>
-            {activeMode === 'draft' ? (
-              <label className="artifact-toggle workspace-artifact">
-                <input
-                  type="checkbox"
-                  checked={createArtifact}
-                  onChange={(event) => setCreateArtifact(event.target.checked)}
-                />
-                <span>Create file</span>
+          {authStatus && !isSignedIn ? <div className="workspace-notice">{authStatus}</div> : null}
+          {showComposerTools ? (
+            <div className="workspace-tools">
+              <button
+                className={activeMode === 'ask' ? 'tool-chip is-active' : 'tool-chip'}
+                type="button"
+                onClick={() => loadWorkflow(askWorkflows[0] ?? workflowCards[0])}
+              >
+                Chat
+              </button>
+              <button
+                className={activeMode === 'draft' ? 'tool-chip is-active' : 'tool-chip'}
+                type="button"
+                onClick={() => loadWorkflow(draftWorkflow)}
+              >
+                Draft file
+              </button>
+              <label className="format-select workspace-format">
+                <span>Format</span>
+                <select value={outputFormat} onChange={(event) => setOutputFormat(event.target.value as OutputFormat)}>
+                  <option value="text">Text</option>
+                  <option value="markdown">Markdown</option>
+                  <option value="json">JSON</option>
+                </select>
               </label>
-            ) : null}
-            {generatedArtifact ? (
-              <a className="workspace-file-link" href={generatedArtifact.url} target="_blank" rel="noreferrer">
-                {generatedArtifact.filename}
-              </a>
-            ) : null}
-          </div>
+              {activeMode === 'draft' ? (
+                <label className="artifact-toggle workspace-artifact">
+                  <input
+                    type="checkbox"
+                    checked={createArtifact}
+                    onChange={(event) => setCreateArtifact(event.target.checked)}
+                  />
+                  <span>Create file</span>
+                </label>
+              ) : null}
+              {generatedArtifact ? (
+                <a className="workspace-file-link" href={generatedArtifact.url} target="_blank" rel="noreferrer">
+                  {generatedArtifact.filename}
+                </a>
+              ) : null}
+            </div>
+          ) : null}
           <div className="workspace-composer">
             <textarea
               value={prompt}
@@ -1135,15 +1137,23 @@ export function App() {
                 }
               }}
               placeholder="Ask about events, groups, sponsorships, mentorship..."
+              disabled={!isSignedIn || isGenerating}
               rows={3}
             />
-            <button type="button" disabled={isGenerating} onClick={submitPrompt} aria-label="Send message">
+            <div className="composer-buttons">
+              <button
+                className="composer-tool-button"
+                type="button"
+                onClick={() => setShowComposerTools((current) => !current)}
+                aria-label="Show tools"
+                disabled={!isSignedIn}
+              >
+                +
+              </button>
+              <button type="button" disabled={isGenerating || !isSignedIn} onClick={submitPrompt} aria-label="Send message">
               {isGenerating ? '…' : '➤'}
-            </button>
-          </div>
-          <div className="workspace-footnote">
-            <span>{statusText}</span>
-            <span>Future auth: Tampa.dev OAuth workspace per user</span>
+              </button>
+            </div>
           </div>
         </footer>
       </section>

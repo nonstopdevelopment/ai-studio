@@ -157,15 +157,28 @@ button {
 
 .recent-thread {
   display: grid;
-  grid-template-columns: 28px 1fr;
-  gap: 14px;
+  grid-template-columns: 1fr 34px;
+  gap: 6px;
   width: 100%;
-  padding: 12px;
+  padding: 6px;
   border: 1px solid transparent;
   border-radius: 14px;
   background: transparent;
   color: inherit;
+  text-align: left;
+}
+
+.recent-thread > button:first-child {
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  align-items: start;
+  gap: 14px;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
   cursor: pointer;
+  padding: 6px;
   text-align: left;
 }
 
@@ -173,6 +186,24 @@ button {
 .recent-thread.is-active {
   border-color: rgba(255, 255, 255, 0.08);
   background: rgba(255, 255, 255, 0.045);
+}
+
+.recent-thread__delete {
+  display: inline-grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--color-faint);
+  cursor: pointer;
+  font-size: 1.1rem;
+}
+
+.recent-thread__delete:hover {
+  background: rgba(232, 90, 79, 0.14);
+  color: var(--color-coral-light);
 }
 
 .recent-thread__icon {
@@ -193,6 +224,13 @@ button {
   margin-top: 4px;
   color: var(--color-faint);
   font-size: 0.82rem;
+}
+
+.recent-empty {
+  margin: 0;
+  color: var(--color-faint);
+  font-size: 0.9rem;
+  line-height: 1.5;
 }
 
 .identity-card {
@@ -383,6 +421,37 @@ button {
   padding: 42px 28px;
 }
 
+.signin-panel,
+.thread-starter {
+  display: grid;
+  justify-items: center;
+  gap: 18px;
+  min-height: min(520px, 62vh);
+  align-content: center;
+  text-align: center;
+}
+
+.signin-panel h1,
+.thread-starter h1 {
+  margin: 0;
+  color: white;
+  font-size: clamp(2rem, 4vw, 3.6rem);
+  letter-spacing: -0.04em;
+}
+
+.signin-panel p,
+.thread-starter p {
+  max-width: 620px;
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 1.08rem;
+  line-height: 1.6;
+}
+
+.example-grid--compact {
+  margin-top: 10px;
+}
+
 .workspace-message {
   display: grid;
   grid-template-columns: 48px 1fr;
@@ -451,6 +520,17 @@ button {
   margin: 0 auto 8px;
 }
 
+.workspace-notice {
+  max-width: 1140px;
+  margin: 0 auto 10px;
+  padding: 10px 14px;
+  border: 1px solid rgba(232, 90, 79, 0.24);
+  border-radius: 12px;
+  background: rgba(232, 90, 79, 0.1);
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 0.9rem;
+}
+
 .tool-chip {
   min-height: 32px;
   padding: 0 12px;
@@ -488,7 +568,7 @@ button {
 
 .workspace-composer {
   display: grid;
-  grid-template-columns: 1fr 64px;
+  grid-template-columns: 1fr auto;
   gap: 12px;
   max-width: 1140px;
   min-height: 118px;
@@ -515,8 +595,15 @@ button {
   color: rgba(148, 163, 184, 0.64);
 }
 
+.composer-buttons {
+  display: flex;
+  align-self: end;
+  gap: 8px;
+}
+
 .workspace-composer button {
   align-self: end;
+  min-width: 52px;
   min-height: 52px;
   border: 0;
   border-radius: 14px;
@@ -534,6 +621,16 @@ button {
 .workspace-composer button:disabled {
   cursor: wait;
   opacity: 0.7;
+}
+
+.workspace-composer textarea:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.workspace-composer .composer-tool-button {
+  background: rgba(255, 255, 255, 0.035);
+  font-size: 1.1rem;
 }
 
 .workspace-footnote {

@@ -98,6 +98,10 @@ const server = createServer(async (request, response) => {
       return handleGetThread(request, response, url.pathname);
     }
 
+    if (request.method === 'DELETE' && url.pathname.startsWith('/api/threads/')) {
+      return handleDeleteThread(request, response, url.pathname);
+    }
+
     if (request.method === 'POST' && url.pathname === '/api/generate') {
       return handleGenerate(request, response);
     }
@@ -438,6 +442,17 @@ async function handleGetThread(request, response, pathname) {
   }
 
   return sendJson(response, 200, { thread });
+}
+
+async function handleDeleteThread(request, response, pathname) {
+  const identity = await resolveIdentity(request);
+  if (!identity.ok) {
+    return sendJson(response, identity.statusCode, identity.body);
+  }
+
+  const threadId = sanitizeId(pathname.split('/').pop() ?? '');
+  await sharedStore.deleteThread(identity.user.id, threadId);
+  return sendJson(response, 200, { ok: true, threadId });
 }
 
 function handleAdminMetrics(request, response) {
@@ -1024,6 +1039,12 @@ function createMemorySharedStore() {
     async getThread(userId, threadId) {
       return getMemoryUserThreads(userId).find((thread) => thread.id === threadId) ?? null;
     },
+    async deleteThread(userId, threadId) {
+      state.sessions.set(
+        getThreadIndexKey(userId),
+        getMemoryUserThreads(userId).filter((thread) => thread.id !== threadId)
+      );
+    },
     async getThreadMessages(userId, threadId) {
       const thread = getMemoryUserThreads(userId).find((item) => item.id === threadId);
       return (thread?.messages ?? []).slice(-8).map((message) => ({
@@ -1160,6 +1181,15 @@ function createRedisSharedStore(client) {
     },
     async getThread(userId, threadId) {
       return safeJsonParse(await client.get(key('thread', sanitizeId(userId), sanitizeId(threadId))));
+    },
+    async deleteThread(userId, threadId) {
+      const safeUserId = sanitizeId(userId);
+      const safeThreadId = sanitizeId(threadId);
+      await client
+        .multi()
+        .del(key('thread', safeUserId, safeThreadId))
+        .zRem(key('user', safeUserId, 'threads'), safeThreadId)
+        .exec();
     },
     async getThreadMessages(userId, threadId) {
       const thread = safeJsonParse(await client.get(key('thread', sanitizeId(userId), sanitizeId(threadId))));
