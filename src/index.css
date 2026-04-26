@@ -57,12 +57,16 @@ button {
 .workspace-app {
   --sidebar-width: 390px;
   display: grid;
-  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+  grid-template-columns: 0 minmax(0, 1fr);
   height: 100vh;
   overflow: hidden;
   background:
     radial-gradient(circle at 55% 20%, rgba(232, 90, 79, 0.08), transparent 24vw),
     #0d1017;
+}
+
+.workspace-app.sidebar-open {
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
 }
 
 .sidebar-scrim {
@@ -73,13 +77,15 @@ button {
   display: flex;
   min-height: 0;
   flex-direction: column;
-  transition: margin-left 180ms ease, transform 180ms ease;
+  width: var(--sidebar-width);
+  overflow: hidden;
+  transition: transform 180ms ease;
   border-right: 1px solid rgba(255, 255, 255, 0.075);
   background: #111722;
 }
 
 .workspace-app:not(.sidebar-open) .workspace-sidebar {
-  margin-left: calc(var(--sidebar-width) * -1);
+  transform: translateX(-100%);
 }
 
 .workspace-brand {
@@ -1803,6 +1809,10 @@ button {
     min-height: 100vh;
     grid-template-columns: 1fr;
     overflow: hidden;
+  }
+
+  .workspace-app.sidebar-open {
+    grid-template-columns: 1fr;
   }
 
   .workspace-sidebar {
