@@ -27,6 +27,11 @@ const authConfig = {
   scopes: process.env.TAMPADEV_AUTH_SCOPES || 'read:user user:email',
 };
 
+const legacyStarterMessages = [
+  'Ask a question to chat with the private-cloud model',
+  'Start a private workspace chat',
+];
+
 const policy = {
   modelName: process.env.VLLM_MODEL || 'gemma-4',
   serviceName: process.env.VLLM_BASE_URL || 'mock://canned-generations',
@@ -1004,10 +1009,12 @@ function createMemorySharedStore() {
       state.sessions.set(sessionId, current.slice(-16));
     },
     async getSessionMessages(sessionId) {
-      return (state.sessions.get(sessionId) ?? []).slice(-8).map((message) => ({
-        role: message.role,
-        content: message.content,
-      }));
+      return cleanConversationMessages(state.sessions.get(sessionId) ?? [])
+        .slice(-8)
+        .map((message) => ({
+          role: message.role,
+          content: message.content,
+        }));
     },
     async getSessionSummary(sessionId) {
       return {
@@ -1047,10 +1054,12 @@ function createMemorySharedStore() {
     },
     async getThreadMessages(userId, threadId) {
       const thread = getMemoryUserThreads(userId).find((item) => item.id === threadId);
-      return (thread?.messages ?? []).slice(-8).map((message) => ({
-        role: message.role === 'assistant' ? 'assistant' : 'user',
-        content: String(message.content ?? ''),
-      }));
+      return cleanConversationMessages(thread?.messages ?? [])
+        .slice(-8)
+        .map((message) => ({
+          role: message.role === 'assistant' ? 'assistant' : 'user',
+          content: String(message.content ?? ''),
+        }));
     },
     async touchThread(userId, thread) {
       const threads = getMemoryUserThreads(userId);
@@ -1142,9 +1151,11 @@ function createRedisSharedStore(client) {
     },
     async getSessionMessages(sessionId) {
       const rows = await client.lRange(key('session', sanitizeId(sessionId)), -8, -1);
-      return rows
+      return cleanConversationMessages(
+        rows
         .map((row) => safeJsonParse(row))
         .filter(Boolean)
+      )
         .map((message) => ({
           role: message.role === 'assistant' ? 'assistant' : 'user',
           content: String(message.content ?? ''),
@@ -1193,10 +1204,12 @@ function createRedisSharedStore(client) {
     },
     async getThreadMessages(userId, threadId) {
       const thread = safeJsonParse(await client.get(key('thread', sanitizeId(userId), sanitizeId(threadId))));
-      return (thread?.messages ?? []).slice(-8).map((message) => ({
-        role: message.role === 'assistant' ? 'assistant' : 'user',
-        content: String(message.content ?? ''),
-      }));
+      return cleanConversationMessages(thread?.messages ?? [])
+        .slice(-8)
+        .map((message) => ({
+          role: message.role === 'assistant' ? 'assistant' : 'user',
+          content: String(message.content ?? ''),
+        }));
     },
     async touchThread(userId, thread) {
       const safeUserId = sanitizeId(userId);
@@ -1360,6 +1373,16 @@ function getProjectedCompletionStatus() {
     activeRequests: Math.max(0, state.activeRequests - 1),
     estimatedWaitMs: state.queue.length * Math.max(policy.minIntervalMs, 1000),
   };
+}
+
+function cleanConversationMessages(messages) {
+  return messages.filter(
+    (message) =>
+      !(
+        message.role === 'assistant' &&
+        legacyStarterMessages.some((starter) => String(message.content ?? '').startsWith(starter))
+      )
+  );
 }
 
 function estimateWaitMs() {

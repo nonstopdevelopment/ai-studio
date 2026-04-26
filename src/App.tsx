@@ -151,6 +151,10 @@ const examplePrompts = [
 
 const authTokenStorageKey = 'ai-studio-auth-token';
 const authVerifierStorageKey = 'ai-studio-auth-verifier';
+const legacyStarterMessages = [
+  'Ask a question to chat with the private-cloud model',
+  'Start a private workspace chat',
+];
 
 function StudioButton({ children, disabled = false, onClick, variant = 'primary' }: StudioButtonProps) {
   return (
@@ -379,9 +383,19 @@ function mapServerThread(thread: ChatThread): ChatThread {
     title: thread.title,
     subtitle: thread.subtitle || 'Saved chat',
     sessionId: thread.sessionId,
-    messages: thread.messages ?? [],
+    messages: cleanThreadMessages(thread.messages ?? []),
     updatedAt: formatThreadTimestamp(thread.updatedAt),
   };
+}
+
+function cleanThreadMessages(messages: Message[]) {
+  return messages.filter(
+    (message) =>
+      !(
+        message.role === 'assistant' &&
+        legacyStarterMessages.some((starter) => message.content.startsWith(starter))
+      )
+  );
 }
 
 function formatThreadTimestamp(value: string) {
@@ -751,7 +765,7 @@ export function App() {
 
     setActiveThreadId(nextThread.id);
     setSessionId(nextThread.sessionId);
-    setMessages(nextThread.messages ?? []);
+    setMessages(cleanThreadMessages(nextThread.messages ?? []));
     setGeneratedArtifact(null);
     setStatusText(`${nextThread.title} loaded.`);
   }
@@ -769,12 +783,13 @@ export function App() {
     }
 
     setThreads((current) => {
+      const cleanedMessages = cleanThreadMessages(nextMessages);
       const nextThread: ChatThread = {
         id: resolvedThreadId,
         title: nextTitle || existingThread?.title || fallbackTitle,
         subtitle: activeWorkflow.title,
         sessionId,
-        messages: nextMessages,
+        messages: cleanedMessages,
         updatedAt: 'Just now',
       };
       return [nextThread, ...current.filter((thread) => thread.id !== resolvedThreadId)].slice(0, 8);
