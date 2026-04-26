@@ -54,6 +54,477 @@ button {
   height: 100vh;
 }
 
+.workspace-app {
+  display: grid;
+  grid-template-columns: 390px minmax(0, 1fr);
+  height: 100vh;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 55% 20%, rgba(232, 90, 79, 0.08), transparent 24vw),
+    #0d1017;
+}
+
+.workspace-sidebar {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  border-right: 1px solid rgba(255, 255, 255, 0.075);
+  background: #111722;
+}
+
+.workspace-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 90px;
+  padding: 22px 24px 14px;
+}
+
+.workspace-brand strong,
+.workspace-hero h1 {
+  color: white;
+  font-weight: 900;
+  letter-spacing: -0.03em;
+}
+
+.workspace-brand span,
+.workspace-hero h1 span {
+  color: var(--color-coral-light);
+}
+
+.workspace-logo,
+.hero-logo {
+  display: inline-grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 999px;
+  background: radial-gradient(circle at 42% 25%, rgba(240, 113, 103, 0.2), transparent 45%), #0b1420;
+  box-shadow: 0 0 28px rgba(36, 88, 143, 0.28);
+}
+
+.workspace-logo {
+  width: 46px;
+  height: 46px;
+}
+
+.workspace-logo img {
+  width: 39px;
+  height: 39px;
+  object-fit: contain;
+}
+
+.new-chat-button {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 54px;
+  margin: 0 24px 20px;
+  padding: 0 20px;
+  border: 1px solid rgba(232, 90, 79, 0.38);
+  border-radius: 14px;
+  background: rgba(232, 90, 79, 0.13);
+  color: var(--color-coral-light);
+  cursor: pointer;
+  font-weight: 900;
+  letter-spacing: 0.01em;
+}
+
+.new-chat-button:hover {
+  background: rgba(232, 90, 79, 0.2);
+}
+
+.workspace-recent {
+  flex: 1;
+  min-height: 0;
+  padding: 24px;
+  border-top: 1px solid rgba(255, 255, 255, 0.065);
+  overflow: auto;
+}
+
+.workspace-recent > span {
+  color: var(--color-faint);
+  font-size: 0.78rem;
+  font-weight: 900;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.recent-thread-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 22px;
+}
+
+.recent-thread {
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  gap: 14px;
+  width: 100%;
+  padding: 12px;
+  border: 1px solid transparent;
+  border-radius: 14px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.recent-thread:hover,
+.recent-thread.is-active {
+  border-color: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.recent-thread__icon {
+  color: white;
+  font-size: 0.72rem;
+  line-height: 1.7;
+}
+
+.recent-thread strong {
+  display: block;
+  color: rgba(226, 232, 240, 0.78);
+  font-size: 0.98rem;
+  line-height: 1.35;
+}
+
+.recent-thread small {
+  display: block;
+  margin-top: 4px;
+  color: var(--color-faint);
+  font-size: 0.82rem;
+}
+
+.identity-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 94px;
+  padding: 18px 24px;
+  border-top: 1px solid rgba(255, 255, 255, 0.075);
+}
+
+.identity-avatar {
+  display: inline-grid;
+  width: 46px;
+  height: 46px;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--color-coral);
+  color: white;
+  font-weight: 900;
+  box-shadow: 0 10px 24px rgba(232, 90, 79, 0.28);
+}
+
+.identity-card strong,
+.identity-card small {
+  display: block;
+}
+
+.identity-card small {
+  margin-top: 5px;
+  color: var(--color-faint);
+}
+
+.workspace-main {
+  display: grid;
+  grid-template-rows: 84px minmax(0, 1fr) auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+.workspace-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 84px;
+  padding: 0 30px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.075);
+  background: rgba(17, 23, 34, 0.78);
+}
+
+.workspace-topbar > div {
+  display: inline-flex;
+  align-items: center;
+  gap: 18px;
+}
+
+.workspace-topbar strong {
+  color: rgba(226, 232, 240, 0.72);
+  font-size: 1.05rem;
+}
+
+.menu-button {
+  display: inline-grid;
+  width: 50px;
+  height: 50px;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--color-muted);
+  cursor: pointer;
+}
+
+.workspace-status {
+  min-height: 40px;
+  padding: 0 16px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  background: rgba(31, 40, 58, 0.84);
+}
+
+.workspace-status span:first-child {
+  color: var(--color-muted);
+  font-size: 0.86rem;
+  font-weight: 800;
+}
+
+.workspace-chat {
+  min-height: 0;
+  overflow: auto;
+}
+
+.workspace-hero {
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  min-height: 100%;
+  padding: 58px 32px;
+  text-align: center;
+}
+
+.hero-logo {
+  width: 98px;
+  height: 98px;
+  margin-bottom: 18px;
+}
+
+.hero-logo img {
+  width: 84px;
+  height: 84px;
+  object-fit: contain;
+}
+
+.workspace-hero h1 {
+  margin: 0;
+  font-size: clamp(2rem, 3vw, 3.1rem);
+}
+
+.workspace-hero p {
+  max-width: 650px;
+  margin: 20px 0 34px;
+  color: var(--color-muted);
+  font-size: 1.16rem;
+  line-height: 1.55;
+}
+
+.example-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(240px, 414px));
+  gap: 14px;
+}
+
+.example-tile {
+  display: grid;
+  grid-template-columns: 40px 1fr;
+  align-items: center;
+  gap: 16px;
+  min-height: 86px;
+  padding: 0 28px;
+  border: 1px solid rgba(255, 255, 255, 0.075);
+  border-radius: 16px;
+  background: #20293b;
+  color: rgba(226, 232, 240, 0.74);
+  cursor: pointer;
+  text-align: left;
+}
+
+.example-tile:hover {
+  border-color: rgba(232, 90, 79, 0.36);
+  transform: translateY(-1px);
+}
+
+.example-tile span {
+  font-size: 1.45rem;
+}
+
+.example-tile strong {
+  font-size: 1rem;
+  line-height: 1.45;
+}
+
+.workspace-thread {
+  display: grid;
+  gap: 24px;
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 42px 28px;
+}
+
+.workspace-message {
+  display: grid;
+  grid-template-columns: 48px 1fr;
+  gap: 16px;
+}
+
+.workspace-message__avatar {
+  display: inline-grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--color-muted);
+  font-size: 0.78rem;
+  font-weight: 900;
+}
+
+.workspace-message--user .workspace-message__avatar {
+  background: rgba(232, 90, 79, 0.18);
+  color: var(--color-coral-light);
+}
+
+.workspace-message__body {
+  min-width: 0;
+  padding: 14px 16px;
+  border: 1px solid rgba(255, 255, 255, 0.065);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.workspace-message__body > span {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--color-sand);
+  font-size: 0.72rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.workspace-message__body p {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.9);
+  line-height: 1.65;
+  white-space: pre-wrap;
+}
+
+.workspace-thinking {
+  min-height: 92px;
+  padding: 12px;
+}
+
+.workspace-composer-shell {
+  padding: 14px 9vw 28px;
+  border-top: 1px solid rgba(255, 255, 255, 0.075);
+  background: linear-gradient(180deg, rgba(13, 16, 23, 0.78), rgba(13, 16, 23, 0.98));
+}
+
+.workspace-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  max-width: 1140px;
+  margin: 0 auto 8px;
+}
+
+.tool-chip {
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid rgba(255, 255, 255, 0.075);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.045);
+  color: var(--color-muted);
+  cursor: pointer;
+  font-size: 0.82rem;
+  font-weight: 900;
+}
+
+.tool-chip.is-active {
+  border-color: rgba(232, 90, 79, 0.38);
+  background: rgba(232, 90, 79, 0.15);
+  color: var(--color-coral-light);
+}
+
+.workspace-format select {
+  min-height: 32px;
+}
+
+.workspace-artifact {
+  min-height: 32px;
+  margin-right: 0;
+}
+
+.workspace-file-link {
+  margin-left: auto;
+  color: var(--color-coral-light);
+  font-size: 0.82rem;
+  font-weight: 900;
+  text-decoration: none;
+}
+
+.workspace-composer {
+  display: grid;
+  grid-template-columns: 1fr 64px;
+  gap: 12px;
+  max-width: 1140px;
+  min-height: 118px;
+  margin: 0 auto;
+  padding: 18px 18px 18px 24px;
+  border: 1px solid rgba(255, 255, 255, 0.085);
+  border-radius: 18px;
+  background: #151b27;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.26);
+}
+
+.workspace-composer textarea {
+  width: 100%;
+  resize: none;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: white;
+  font-size: 1rem;
+  line-height: 1.55;
+}
+
+.workspace-composer textarea::placeholder {
+  color: rgba(148, 163, 184, 0.64);
+}
+
+.workspace-composer button {
+  align-self: end;
+  min-height: 52px;
+  border: 0;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.055);
+  color: var(--color-muted);
+  cursor: pointer;
+  font-size: 1.3rem;
+}
+
+.workspace-composer button:hover {
+  background: rgba(232, 90, 79, 0.18);
+  color: white;
+}
+
+.workspace-composer button:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
+.workspace-footnote {
+  display: flex;
+  justify-content: center;
+  gap: 16px;
+  max-width: 1140px;
+  margin: 14px auto 0;
+  color: var(--color-faint);
+  font-size: 0.82rem;
+}
+
 .studio-app {
   position: relative;
   display: flex;
@@ -1160,6 +1631,18 @@ button {
 }
 
 @media (max-width: 1180px) {
+  .workspace-app {
+    grid-template-columns: 300px minmax(0, 1fr);
+  }
+
+  .example-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .workspace-composer-shell {
+    padding-inline: 28px;
+  }
+
   .studio-workspace {
     grid-template-columns: 220px minmax(0, 1fr);
   }
@@ -1183,6 +1666,67 @@ button {
     height: auto;
     min-height: 100vh;
     overflow: auto;
+  }
+
+  .workspace-app {
+    height: auto;
+    min-height: 100vh;
+    grid-template-columns: 1fr;
+    overflow: auto;
+  }
+
+  .workspace-sidebar {
+    min-height: auto;
+    border-right: 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.075);
+  }
+
+  .workspace-recent {
+    display: none;
+  }
+
+  .identity-card {
+    min-height: auto;
+  }
+
+  .workspace-main {
+    min-height: 100vh;
+    grid-template-rows: auto minmax(56vh, 1fr) auto;
+  }
+
+  .workspace-topbar,
+  .workspace-footnote {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .workspace-topbar {
+    gap: 12px;
+    padding: 16px;
+  }
+
+  .workspace-hero {
+    padding: 34px 18px;
+  }
+
+  .workspace-thread {
+    padding: 24px 14px;
+  }
+
+  .workspace-message {
+    grid-template-columns: 1fr;
+  }
+
+  .workspace-message__avatar {
+    display: none;
+  }
+
+  .workspace-composer-shell {
+    padding: 14px;
+  }
+
+  .workspace-composer {
+    grid-template-columns: 1fr;
   }
 
   .studio-app {

@@ -105,6 +105,16 @@ For OKD with more than one gateway replica, replace these local-only stores:
 - Artifacts: use an object bucket or PVC-backed artifact service instead of local `/tmp`.
 - Gateway policy: keep rate limits and queue state centralized if requests can land on multiple pods.
 
+## User Workspace Plan
+
+The current workspace shell keeps threads in the browser and sends a generated `sessionId` to the gateway. When Tampa.dev authentication is connected, use the authenticated Tampa.dev user as the durable workspace owner:
+
+- Browser obtains a Tampa.dev access token through OAuth 2.1 with PKCE.
+- Browser sends `Authorization: Bearer <access_token>` to the AI Studio gateway.
+- Gateway validates the token, derives a stable `userId`, and uses that for rate limits, thread ownership, and artifact access.
+- Threads should move from browser-only state into shared storage keyed by `{userId, threadId}`.
+- Anonymous sessions can remain as a fallback for public demos.
+
 ## Gateway Environment
 
 The gateway defaults to canned mock generations. To point it at the in-cluster vLLM service, set:

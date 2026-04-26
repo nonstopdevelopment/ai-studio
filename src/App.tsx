@@ -1,9 +1,7 @@
 import { type ReactNode, useEffect, useMemo, useState } from 'react';
 import { clusterPolicy, formatPolicyWindow } from './lib/cluster-policy';
 import {
-  modeOptions,
   workflowCards,
-  type ArtifactPreview,
   type ComposerMode,
   type WorkflowCard,
 } from './mock-data';
@@ -56,6 +54,15 @@ type GeneratedArtifact = {
 
 type OutputFormat = 'markdown' | 'text' | 'json';
 
+type ChatThread = {
+  id: string;
+  title: string;
+  subtitle: string;
+  sessionId: string;
+  messages: Message[];
+  updatedAt: string;
+};
+
 type AdminJob = {
   requestId: string;
   userId: string;
@@ -91,15 +98,96 @@ type AdminMetrics = {
   recentRequests: AdminJob[];
 };
 
-const artifactDemoPrompt =
-  'Create a deployment readiness brief for moving Tampa Devs AI Studio from local port-forward testing into OKD. Include sections for user experience, gateway/session memory, generated artifacts, object storage, rate limiting for one loaded vLLM model, observability, rollback, and a short operator checklist. Format it as Markdown that could be saved as a project file.';
-
 const welcomeMessage: Message = {
   id: 'welcome',
   role: 'assistant',
   content: 'Ask a question to chat with the private-cloud model, or switch to Draft Files when you want a generated Markdown, text, or JSON artifact.',
   state: 'done',
 };
+
+const examplePrompts = [
+  {
+    icon: '📅',
+    title: 'What events are happening this week?',
+    prompt: 'What Tampa Bay developer or startup events should I pay attention to this week?',
+  },
+  {
+    icon: '👥',
+    title: 'How do I join Tampa Devs?',
+    prompt: 'How do I join Tampa Devs and start meeting people in the community?',
+  },
+  {
+    icon: '🏆',
+    title: 'Tell me about BayHacks',
+    prompt: 'Tell me about BayHacks and what someone should know before registering.',
+  },
+  {
+    icon: '🤝',
+    title: 'How do I become a sponsor?',
+    prompt: 'How should a company think about sponsoring Tampa Devs without sounding salesy?',
+  },
+  {
+    icon: '💼',
+    title: 'Tell me about the Talent Network',
+    prompt: 'Explain the Tampa Devs Talent Network and who it helps.',
+  },
+  {
+    icon: '🧑‍💻',
+    title: 'How does mentorship work?',
+    prompt: 'How could mentorship work for Tampa Bay developers who are early in their careers?',
+  },
+];
+
+const seedThreads: ChatThread[] = [
+  {
+    id: 'seed-events',
+    title: 'Tampa Bay events May 2025',
+    subtitle: 'Example thread',
+    sessionId: 'seed-events',
+    messages: [
+      welcomeMessage,
+      {
+        id: 'seed-events-user',
+        role: 'user',
+        content: 'What events are happening this week?',
+        state: 'done',
+      },
+    ],
+    updatedAt: 'Yesterday',
+  },
+  {
+    id: 'seed-bayhacks',
+    title: 'BayHacks registration info',
+    subtitle: 'Example thread',
+    sessionId: 'seed-bayhacks',
+    messages: [
+      welcomeMessage,
+      {
+        id: 'seed-bayhacks-user',
+        role: 'user',
+        content: 'Tell me about BayHacks registration.',
+        state: 'done',
+      },
+    ],
+    updatedAt: '2 days ago',
+  },
+  {
+    id: 'seed-sponsor',
+    title: 'Sponsorship packages',
+    subtitle: 'Example thread',
+    sessionId: 'seed-sponsor',
+    messages: [
+      welcomeMessage,
+      {
+        id: 'seed-sponsor-user',
+        role: 'user',
+        content: 'How do I become a sponsor?',
+        state: 'done',
+      },
+    ],
+    updatedAt: 'Last week',
+  },
+];
 
 function StudioButton({ children, disabled = false, onClick, variant = 'primary' }: StudioButtonProps) {
   return (
@@ -402,11 +490,11 @@ export function App() {
   const [activeWorkflowId, setActiveWorkflowId] = useState(workflowCards[0].id);
   const [prompt, setPrompt] = useState(workflowCards[0].samplePrompt);
   const [messages, setMessages] = useState<Message[]>([welcomeMessage]);
-  const [artifact, setArtifact] = useState<ArtifactPreview>(workflowCards[0].artifact);
+  const [threads, setThreads] = useState<ChatThread[]>(seedThreads);
+  const [activeThreadId, setActiveThreadId] = useState('new-thread');
   const [statusText, setStatusText] = useState('Gateway status has not loaded yet.');
   const [gatewayStatus, setGatewayStatus] = useState<GatewayStatus | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
-  const [copyState, setCopyState] = useState<'idle' | 'copied'>('idle');
   const [sessionId, setSessionId] = useState(createTabSessionId);
   const [createArtifact, setCreateArtifact] = useState(false);
   const [outputFormat, setOutputFormat] = useState<OutputFormat>('text');
@@ -415,11 +503,6 @@ export function App() {
   const activeWorkflow = useMemo(
     () => workflowCards.find((workflow) => workflow.id === activeWorkflowId) ?? workflowCards[0],
     [activeWorkflowId]
-  );
-
-  const filteredWorkflows = useMemo(
-    () => workflowCards.filter((workflow) => workflow.mode === activeMode),
-    [activeMode]
   );
 
   useEffect(() => {
@@ -466,31 +549,65 @@ export function App() {
     setPrompt(workflow.samplePrompt);
     setCreateArtifact(workflow.mode === 'draft');
     setOutputFormat(workflow.mode === 'draft' ? 'markdown' : 'text');
-    setArtifact(workflow.artifact);
     setStatusText(`${workflow.title} loaded.`);
   }
 
-  function activateMode(mode: ComposerMode) {
-    const workflowForMode =
-      workflowCards.find((workflow) => workflow.mode === mode) ?? workflowCards[0];
-    loadWorkflow(workflowForMode);
-  }
-
-  function loadArtifactDemo() {
-    setActiveMode('draft');
-    setActiveWorkflowId('deployment-brief');
-    setPrompt(artifactDemoPrompt);
-    setCreateArtifact(true);
-    setOutputFormat('markdown');
-    setStatusText('Artifact demo prompt loaded.');
-  }
-
   function startNewChat() {
-    setSessionId(createTabSessionId());
-    setMessages([{ ...welcomeMessage, id: `welcome-${Date.now()}` }]);
+    const nextSessionId = createTabSessionId();
+    const nextThreadId = `thread-${Date.now().toString(36)}`;
+    const nextMessages = [{ ...welcomeMessage, id: `welcome-${Date.now()}` }];
+    setSessionId(nextSessionId);
+    setActiveThreadId(nextThreadId);
+    setMessages(nextMessages);
+    setThreads((current) => [
+      {
+        id: nextThreadId,
+        title: 'New workspace chat',
+        subtitle: 'Just now',
+        sessionId: nextSessionId,
+        messages: nextMessages,
+        updatedAt: 'Just now',
+      },
+      ...current.slice(0, 7),
+    ]);
     setGeneratedArtifact(null);
-    setCopyState('idle');
+    setPrompt('');
+    setActiveMode('ask');
+    setActiveWorkflowId('general-chat');
+    setOutputFormat('text');
+    setCreateArtifact(false);
     setStatusText('Started a new chat with fresh context.');
+  }
+
+  function loadThread(thread: ChatThread) {
+    setActiveThreadId(thread.id);
+    setSessionId(thread.sessionId);
+    setMessages(thread.messages);
+    setGeneratedArtifact(null);
+    setStatusText(`${thread.title} loaded.`);
+  }
+
+  function updateThread(nextMessages: Message[], nextTitle?: string) {
+    const existingThread = threads.find((thread) => thread.id === activeThreadId);
+    const resolvedThreadId = existingThread ? activeThreadId : `thread-${Date.now().toString(36)}`;
+    const fallbackTitle =
+      nextMessages.find((message) => message.role === 'user')?.content.slice(0, 44) || 'New workspace chat';
+
+    if (!existingThread) {
+      setActiveThreadId(resolvedThreadId);
+    }
+
+    setThreads((current) => {
+      const nextThread: ChatThread = {
+        id: resolvedThreadId,
+        title: nextTitle || existingThread?.title || fallbackTitle,
+        subtitle: activeWorkflow.title,
+        sessionId,
+        messages: nextMessages,
+        updatedAt: 'Just now',
+      };
+      return [nextThread, ...current.filter((thread) => thread.id !== resolvedThreadId)].slice(0, 8);
+    });
   }
 
   async function submitPrompt() {
@@ -509,23 +626,26 @@ export function App() {
     const userMessageId = `user-${stamp}`;
     const assistantMessageId = `assistant-${stamp}`;
     setIsGenerating(true);
-    setCopyState('idle');
     setStatusText('Submitted to gateway.');
-    setMessages((current) => [
-      ...current,
-      {
-        id: userMessageId,
-        role: 'user',
-        content: trimmedPrompt,
-        state: 'done',
-      },
-      {
-        id: assistantMessageId,
-        role: 'assistant',
-        content: 'Waiting for gateway response...',
-        state: 'streaming',
-      },
-    ]);
+    setMessages((current) => {
+      const nextMessages = [
+        ...current,
+        {
+          id: userMessageId,
+          role: 'user' as const,
+          content: trimmedPrompt,
+          state: 'done' as const,
+        },
+        {
+          id: assistantMessageId,
+          role: 'assistant' as const,
+          content: 'Waiting for gateway response...',
+          state: 'streaming' as const,
+        },
+      ];
+      updateThread(nextMessages, trimmedPrompt.slice(0, 44));
+      return nextMessages;
+    });
 
     try {
       const response = await fetch('/api/generate', {
@@ -570,325 +690,227 @@ export function App() {
       }
 
       setGeneratedArtifact(body.artifact ?? null);
-      setArtifact(activeWorkflow.artifact);
       setStatusText(
         `${activeWorkflow.title} completed in ${formatPolicyWindow(body.latencyMs ?? 0)}. Session memory has ${body.memory?.messageCount ?? messages.length} messages.`
       );
-      setMessages((current) =>
-        current.map((message) =>
+      setMessages((current) => {
+        const nextMessages = current.map((message) =>
           message.id === assistantMessageId
             ? {
                 ...message,
                 content: String(body.text ?? ''),
-                state: 'done',
+                state: 'done' as const,
               }
             : message
-        )
-      );
+        );
+        updateThread(nextMessages);
+        return nextMessages;
+      });
     } catch (error) {
       const message = formatClientError(error);
       setStatusText(message);
-      setMessages((current) =>
-        current.map((item) =>
+      setMessages((current) => {
+        const nextMessages = current.map((item) =>
           item.id === assistantMessageId
             ? {
                 ...item,
                 content: `Gateway error: ${message}`,
-                state: 'done',
+                state: 'done' as const,
               }
             : item
-        )
-      );
+        );
+        updateThread(nextMessages);
+        return nextMessages;
+      });
     } finally {
       setIsGenerating(false);
     }
   }
 
-  const policy = gatewayStatus?.policy ?? clusterPolicy;
-  const latestAssistantMessage =
-    [...messages].reverse().find((message) => message.role === 'assistant') ?? messages[0];
-  const latestUserMessage = [...messages].reverse().find((message) => message.role === 'user');
-  const isThinking = latestAssistantMessage?.state === 'streaming';
-
-  async function copyResponse() {
-    if (!latestAssistantMessage?.content) {
-      return;
-    }
-
-    try {
-      await navigator.clipboard.writeText(latestAssistantMessage.content);
-      setCopyState('copied');
-      window.setTimeout(() => setCopyState('idle'), 1400);
-    } catch {
-      setStatusText('Copy failed. Select the response text manually.');
-    }
-  }
+  const hasStartedChat = messages.some((message) => message.role === 'user');
+  const askWorkflows = workflowCards.filter((workflow) => workflow.mode === 'ask');
+  const draftWorkflow = workflowCards.find((workflow) => workflow.id === 'deployment-brief') ?? workflowCards[0];
 
   return (
-    <div className="studio-app">
-      <header className="studio-topbar">
-        <div className="project-mark" aria-label="OnTampa community AI lab">
-          <span className="pirate-mark" aria-hidden="true">
+    <div className="workspace-app">
+      <aside className="workspace-sidebar">
+        <div className="workspace-brand">
+          <span className="workspace-logo">
             <img src="/ontampa-pirate.png" alt="" />
           </span>
-          <span className="project-mark__text">
-            <strong>OnTampa Lab</strong>
-            <small>Private cloud demo</small>
-          </span>
+          <strong>
+            Tampa<span>.dev</span> AI
+          </strong>
         </div>
-        <div className="studio-topbar__center">
-          <h1>Private Cloud AI Studio</h1>
-          <p>{statusText}</p>
-        </div>
-        <div className="studio-topbar__status">
-          <span className={`status-dot status-dot--${gatewayStatus ? 'online' : 'offline'}`} />
-          <span>{gatewayStatus?.mode === 'live' ? 'private cloud live' : gatewayStatus?.mode ?? 'offline'}</span>
-        </div>
-      </header>
 
-      <main className="studio-workspace">
-        <aside className="workflow-panel">
-          <div className="mode-tabs" aria-label="Workflow mode">
-            {modeOptions.map((mode) => (
+        <button className="new-chat-button" type="button" onClick={startNewChat} disabled={isGenerating}>
+          <span>+</span>
+          New Chat
+        </button>
+
+        <section className="workspace-recent">
+          <span>Recent</span>
+          <div className="recent-thread-list">
+            {threads.map((thread) => (
               <button
-                key={mode.id}
-                className={activeMode === mode.id ? 'is-active' : undefined}
+                key={thread.id}
+                className={thread.id === activeThreadId ? 'recent-thread is-active' : 'recent-thread'}
                 type="button"
-                onClick={() => activateMode(mode.id)}
+                onClick={() => loadThread(thread)}
               >
-                {mode.label}
+                <span className="recent-thread__icon">●</span>
+                <span>
+                  <strong>{thread.title}</strong>
+                  <small>{thread.updatedAt}</small>
+                </span>
               </button>
             ))}
           </div>
+        </section>
 
-          <div className="workflow-list">
-            {filteredWorkflows.map((workflow) => (
-              <button
-                key={workflow.id}
-                className={activeWorkflowId === workflow.id ? 'workflow-card is-active' : 'workflow-card'}
-                type="button"
-                onClick={() => loadWorkflow(workflow)}
-              >
-                <span>{workflow.eyebrow}</span>
-                <strong>{workflow.title}</strong>
-                <small>{workflow.outputType}</small>
-              </button>
-            ))}
+        <section className="identity-card">
+          <div className="identity-avatar">J</div>
+          <div>
+            <strong>Guest workspace</strong>
+            <small>Tampa.dev auth ready</small>
           </div>
-        </aside>
+        </section>
+      </aside>
 
-        <section className="prompt-panel">
-          <div className="panel-heading">
-            <div>
-              <span>Workspace</span>
-              <h2>{activeWorkflow.title}</h2>
-            </div>
-            <span className="session-pill">Session memory on</span>
-            <StudioButton variant="secondary" disabled={isGenerating} onClick={startNewChat}>
-              New chat
-            </StudioButton>
+      <section className="workspace-main">
+        <header className="workspace-topbar">
+          <div>
+            <button className="menu-button" type="button" aria-label="Open workspace menu">☰</button>
+            <strong>Tampa Devs AI</strong>
           </div>
+          <div className="workspace-status">
+            <span>{gatewayStatus?.modelName ?? clusterPolicy.modelName}</span>
+            <span className="status-dot status-dot--online" />
+            <strong>{gatewayStatus?.mode === 'live' ? 'Online' : gatewayStatus?.mode ?? 'Offline'}</strong>
+          </div>
+        </header>
 
-          <label className="prompt-label" htmlFor="studio-prompt">
-            Prompt
-          </label>
-          <textarea
-            id="studio-prompt"
-            className="prompt-input"
-            value={prompt}
-            onChange={(event) => setPrompt(event.target.value)}
-            rows={9}
-          />
+        <main className="workspace-chat">
+          {!hasStartedChat ? (
+            <section className="workspace-hero">
+              <span className="hero-logo">
+                <img src="/ontampa-pirate.png" alt="" />
+              </span>
+              <h1>
+                Tampa<span>.dev</span> AI
+              </h1>
+              <p>Your workspace for the Tampa Bay tech community. Ask questions, keep threads, and draft useful files.</p>
+              <div className="example-grid">
+                {examplePrompts.map((example) => (
+                  <button
+                    key={example.title}
+                    className="example-tile"
+                    type="button"
+                    onClick={() => {
+                      setPrompt(example.prompt);
+                      setActiveMode('ask');
+                      setActiveWorkflowId(askWorkflows[0]?.id ?? 'general-chat');
+                      setOutputFormat('text');
+                      setCreateArtifact(false);
+                    }}
+                  >
+                    <span>{example.icon}</span>
+                    <strong>{example.title}</strong>
+                  </button>
+                ))}
+              </div>
+            </section>
+          ) : (
+            <section className="workspace-thread" aria-label="Conversation thread">
+              {messages.map((message) => (
+                <article key={message.id} className={`workspace-message workspace-message--${message.role}`}>
+                  <div className="workspace-message__avatar">{message.role === 'assistant' ? 'AI' : 'You'}</div>
+                  <div className="workspace-message__body">
+                    <span>{message.role === 'assistant' ? 'Tampa.dev AI' : 'You'}</span>
+                    {message.state === 'streaming' ? (
+                      <div className="thinking-card workspace-thinking" role="status" aria-live="polite">
+                        <div className="thinking-orbit">
+                          <span />
+                          <span />
+                          <span />
+                        </div>
+                        <p>Thinking through the local model...</p>
+                      </div>
+                    ) : outputFormat === 'markdown' && message.role === 'assistant' ? (
+                      <MarkdownRenderer content={message.content} />
+                    ) : (
+                      <p>{message.content}</p>
+                    )}
+                  </div>
+                </article>
+              ))}
+            </section>
+          )}
+        </main>
 
-          <div className="composer-actions">
+        <footer className="workspace-composer-shell">
+          <div className="workspace-tools">
+            <button
+              className={activeMode === 'ask' ? 'tool-chip is-active' : 'tool-chip'}
+              type="button"
+              onClick={() => loadWorkflow(askWorkflows[0] ?? workflowCards[0])}
+            >
+              Chat
+            </button>
+            <button
+              className={activeMode === 'draft' ? 'tool-chip is-active' : 'tool-chip'}
+              type="button"
+              onClick={() => loadWorkflow(draftWorkflow)}
+            >
+              Draft file
+            </button>
+            <label className="format-select workspace-format">
+              <span>Format</span>
+              <select value={outputFormat} onChange={(event) => setOutputFormat(event.target.value as OutputFormat)}>
+                <option value="text">Text</option>
+                <option value="markdown">Markdown</option>
+                <option value="json">JSON</option>
+              </select>
+            </label>
             {activeMode === 'draft' ? (
-              <label className="artifact-toggle">
+              <label className="artifact-toggle workspace-artifact">
                 <input
                   type="checkbox"
                   checked={createArtifact}
                   onChange={(event) => setCreateArtifact(event.target.checked)}
                 />
-                <span>Create Markdown artifact</span>
+                <span>Create file</span>
               </label>
             ) : null}
-            {activeMode === 'draft' ? (
-              <StudioButton variant="secondary" onClick={loadArtifactDemo}>
-              Load artifact demo
-              </StudioButton>
-            ) : null}
-            <label className="format-select">
-              <span>Format</span>
-              <select
-                value={outputFormat}
-                onChange={(event) => setOutputFormat(event.target.value as OutputFormat)}
-              >
-                <option value="markdown">Markdown</option>
-                <option value="text">Text</option>
-                <option value="json">JSON</option>
-              </select>
-            </label>
-            <StudioButton disabled={isGenerating} onClick={submitPrompt}>
-              {isGenerating ? 'Running' : activeMode === 'draft' ? 'Draft File' : 'Ask'}
-            </StudioButton>
-          </div>
-
-          <div className="prompt-context">
-            <span>Current workflow</span>
-            <p>{activeWorkflow.teaser}</p>
-            {latestUserMessage ? <small>Last submitted prompt is shown in the review panel.</small> : null}
-          </div>
-
-          <section className="chat-thread" aria-label="Conversation thread">
-            <div className="thread-heading">
-              <span>Conversation</span>
-              <strong>{messages.length} messages</strong>
-            </div>
-            <div className="thread-list">
-              {messages.map((message) => (
-                <article key={message.id} className={`thread-message thread-message--${message.role}`}>
-                  <div>
-                    <span>{message.role === 'assistant' ? 'AI Studio' : 'User'}</span>
-                    <span>{message.state}</span>
-                  </div>
-                  <p>{message.content}</p>
-                </article>
-              ))}
-            </div>
-          </section>
-        </section>
-
-        <section className="review-panel">
-          <article className="response-panel">
-            <div className="panel-heading response-heading">
-              <div>
-                <span>Response review</span>
-                <h2>{activeWorkflow.title}</h2>
-              </div>
-              <StudioButton variant="secondary" disabled={!latestAssistantMessage?.content} onClick={copyResponse}>
-                {copyState === 'copied' ? 'Copied' : 'Copy'}
-              </StudioButton>
-            </div>
-
-            <div className="response-meta">
-              <span>{latestAssistantMessage.state}</span>
-              <span>{gatewayStatus?.modelName ?? clusterPolicy.modelName}</span>
-              <span>Community private cloud</span>
-              <span>{sessionId.slice(0, 8)} session</span>
-              <span>{outputFormat}</span>
-              <span>{activeWorkflow.outputType}</span>
-            </div>
-
-            {latestUserMessage ? (
-              <div className="submitted-prompt">
-                <span>Prompt sent</span>
-                <p>{latestUserMessage.content}</p>
-              </div>
-            ) : null}
-
-            <div className={`response-body response-body--${latestAssistantMessage.state}`}>
-              {isThinking ? (
-                <div className="thinking-card" role="status" aria-live="polite">
-                  <div className="thinking-orbit">
-                    <span />
-                    <span />
-                    <span />
-                  </div>
-                  <div>
-                    <strong>Thinking through the local model</strong>
-                    <p>
-                      The request is queued safely through the gateway while Gemma prepares a response.
-                    </p>
-                  </div>
-                </div>
-              ) : (
-                outputFormat === 'markdown' ? (
-                  <MarkdownRenderer content={latestAssistantMessage.content} />
-                ) : (
-                  <pre className={`raw-output raw-output--${outputFormat}`}>
-                    <code>{latestAssistantMessage.content}</code>
-                  </pre>
-                )
-              )}
-            </div>
-
             {generatedArtifact ? (
-              <a className="artifact-link" href={generatedArtifact.url} target="_blank" rel="noreferrer">
-                <span>Generated file</span>
-                <strong>{generatedArtifact.filename}</strong>
-                <small>{Math.ceil(generatedArtifact.bytes / 1024)} KB Markdown artifact</small>
+              <a className="workspace-file-link" href={generatedArtifact.url} target="_blank" rel="noreferrer">
+                {generatedArtifact.filename}
               </a>
             ) : null}
-          </article>
-        </section>
-      </main>
-
-      <details className="studio-details">
-        <summary>
-          <span>Studio details</span>
-          <strong>{gatewayStatus?.modelName ?? clusterPolicy.modelName}</strong>
-        </summary>
-        <div className="details-grid">
-          <section className="artifact-panel">
-            <div className="panel-heading panel-heading--compact">
-              <div>
-                <span>Structured output</span>
-                <h2>{artifact.title}</h2>
-              </div>
-            </div>
-            <p>{artifact.summary}</p>
-            <ul>
-              {artifact.bullets.map((bullet) => (
-                <li key={bullet}>{bullet}</li>
-              ))}
-            </ul>
-            <div className="tag-row">
-              {artifact.tags.map((tag) => (
-                <span key={tag}>{tag}</span>
-              ))}
-            </div>
-            {generatedArtifact ? (
-              <a className="details-artifact-link" href={generatedArtifact.url} target="_blank" rel="noreferrer">
-                Open generated temp artifact: {generatedArtifact.filename}
-              </a>
-            ) : null}
-          </section>
-
-          <section className="gateway-panel">
-            <div className="panel-heading panel-heading--compact">
-              <div>
-                <span>Private cloud gateway</span>
-                <h2>{gatewayStatus?.mode === 'live' ? 'Live model route' : 'Mock route'}</h2>
-              </div>
-            </div>
-            <div className="stat-grid">
-              <StatTile label="Active" value={gatewayStatus?.activeRequests ?? 0} />
-              <StatTile label="Queue" value={gatewayStatus?.queueDepth ?? 0} />
-              <StatTile label="Done" value={gatewayStatus?.completedRequests ?? 0} />
-              <StatTile label="Failed" value={gatewayStatus?.failedRequests ?? 0} />
-            </div>
-            <dl className="service-list">
-              <div>
-                <dt>Endpoint</dt>
-                <dd>{gatewayStatus?.serviceName ?? clusterPolicy.serviceName}</dd>
-              </div>
-              <div>
-                <dt>Per-user</dt>
-                <dd>
-                  {policy.perUserConcurrentRequests} inflight / {policy.perUserRequestsPerMinute} rpm
-                </dd>
-              </div>
-              <div>
-                <dt>Timeout</dt>
-                <dd>{formatPolicyWindow(policy.requestTimeoutMs)}</dd>
-              </div>
-              <div>
-                <dt>Max output</dt>
-                <dd>{policy.maxOutputTokens} tokens</dd>
-              </div>
-            </dl>
-          </section>
-        </div>
-      </details>
+          </div>
+          <div className="workspace-composer">
+            <textarea
+              value={prompt}
+              onChange={(event) => setPrompt(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && !event.shiftKey) {
+                  event.preventDefault();
+                  void submitPrompt();
+                }
+              }}
+              placeholder="Ask about events, groups, sponsorships, mentorship..."
+              rows={3}
+            />
+            <button type="button" disabled={isGenerating} onClick={submitPrompt} aria-label="Send message">
+              {isGenerating ? '…' : '➤'}
+            </button>
+          </div>
+          <div className="workspace-footnote">
+            <span>{statusText}</span>
+            <span>Future auth: Tampa.dev OAuth workspace per user</span>
+          </div>
+        </footer>
+      </section>
     </div>
   );
 }
