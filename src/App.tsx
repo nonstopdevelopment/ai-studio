@@ -68,6 +68,7 @@ type AuthConfig = {
   authMode: 'optional' | 'required' | string;
   authorizeUrl: string;
   clientId: string;
+  redirectUri: string;
   scopes: string;
 };
 
@@ -645,7 +646,7 @@ export function App() {
             body: JSON.stringify({
               code,
               codeVerifier: verifier,
-              redirectUri: `${window.location.origin}/`,
+              redirectUri: config.redirectUri || window.location.origin,
             }),
           });
           const tokenBody = await tokenResponse.json();
@@ -734,7 +735,7 @@ export function App() {
     const authorizeUrl = new URL(authConfig.authorizeUrl);
     authorizeUrl.searchParams.set('response_type', 'code');
     authorizeUrl.searchParams.set('client_id', authConfig.clientId);
-    authorizeUrl.searchParams.set('redirect_uri', `${window.location.origin}/`);
+    authorizeUrl.searchParams.set('redirect_uri', authConfig.redirectUri || window.location.origin);
     authorizeUrl.searchParams.set('scope', authConfig.scopes);
     authorizeUrl.searchParams.set('code_challenge', challenge);
     authorizeUrl.searchParams.set('code_challenge_method', 'S256');

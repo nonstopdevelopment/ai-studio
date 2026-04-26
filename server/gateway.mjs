@@ -20,6 +20,7 @@ const authConfig = {
   issuer: process.env.TAMPADEV_AUTH_ISSUER || '',
   authorizeUrl: process.env.TAMPADEV_AUTH_AUTHORIZE_URL || 'https://tampa.dev/oauth/authorize',
   tokenUrl: process.env.TAMPADEV_AUTH_TOKEN_URL || 'https://tampa.dev/oauth/token',
+  redirectUri: process.env.TAMPADEV_AUTH_REDIRECT_URI || '',
   userInfoUrl: process.env.TAMPADEV_AUTH_USERINFO_URL || '',
   introspectionUrl: process.env.TAMPADEV_AUTH_INTROSPECTION_URL || '',
   clientId: process.env.TAMPADEV_AUTH_CLIENT_ID || '',
@@ -807,6 +808,7 @@ function getPublicAuthConfig() {
     authMode: authConfig.mode,
     authorizeUrl: authConfig.authorizeUrl,
     clientId: authConfig.clientId,
+    redirectUri: authConfig.redirectUri,
     scopes: authConfig.scopes,
   };
 }

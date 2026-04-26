@@ -23,6 +23,7 @@ data:
   AUTH_MODE: optional
   TAMPADEV_AUTH_AUTHORIZE_URL: https://tampa.dev/oauth/authorize
   TAMPADEV_AUTH_TOKEN_URL: https://tampa.dev/oauth/token
+  TAMPADEV_AUTH_REDIRECT_URI: https://ai-studio-nonstopdev-ai.apps.gaspar.ontampa.dev
   TAMPADEV_AUTH_USERINFO_URL: https://api.tampa.dev/v1/me
   TAMPADEV_AUTH_SCOPES: read:user user:email
   THREAD_TTL_SECONDS: "2592000"
