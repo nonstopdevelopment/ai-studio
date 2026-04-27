@@ -652,6 +652,42 @@ button {
   font-size: 0.68rem;
 }
 
+.message-tool-sources {
+  display: flex;
+  flex-basis: 100%;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.message-tool-sources > span {
+  color: var(--color-faint);
+  font-size: 0.72rem;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.message-tool-sources a {
+  max-width: min(100%, 280px);
+  overflow: hidden;
+  padding: 4px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.075);
+  border-radius: 999px;
+  color: var(--color-coral-light);
+  font-size: 0.76rem;
+  font-weight: 800;
+  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.message-tool-sources a:hover {
+  border-color: rgba(232, 90, 79, 0.32);
+  background: rgba(232, 90, 79, 0.1);
+}
+
 .workspace-message__body p {
   margin: 0;
   color: rgba(255, 255, 255, 0.9);

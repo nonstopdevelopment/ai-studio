@@ -18,7 +18,15 @@ type ToolCallSummary = {
   tool: string;
   ok: boolean;
   url?: string | null;
+  source?: string | null;
+  sourceUrl?: string | null;
+  sources?: ToolSourceSummary[];
   error?: string | null;
+};
+
+type ToolSourceSummary = {
+  title: string;
+  url: string;
 };
 
 type ButtonVariant = 'primary' | 'secondary';
@@ -627,8 +635,42 @@ function ToolCallPills({ toolCalls }: { toolCalls?: ToolCallSummary[] }) {
           Used {formatToolName(toolCall.tool)}
         </span>
       ))}
+      {visibleToolCalls.flatMap(getToolSources).length > 0 ? (
+        <div className="message-tool-sources">
+          <span>Sources</span>
+          {visibleToolCalls.flatMap(getToolSources).map((source, index) => (
+            <a key={`${source.url}-${index}`} href={source.url} target="_blank" rel="noreferrer">
+              {source.title || getHostname(source.url)}
+            </a>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
+}
+
+function getToolSources(toolCall: ToolCallSummary) {
+  if (Array.isArray(toolCall.sources) && toolCall.sources.length > 0) {
+    return toolCall.sources.filter((source) => source.url).slice(0, 5);
+  }
+
+  if (toolCall.sourceUrl) {
+    return [{ title: toolCall.source || getHostname(toolCall.sourceUrl), url: toolCall.sourceUrl }];
+  }
+
+  if (toolCall.url) {
+    return [{ title: getHostname(toolCall.url), url: toolCall.url }];
+  }
+
+  return [];
+}
+
+function getHostname(url: string) {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return url;
+  }
 }
 
 function formatToolName(toolName: string) {

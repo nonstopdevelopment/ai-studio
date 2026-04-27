@@ -711,9 +711,35 @@ function summarizeToolContext(toolContext) {
       tool: result.tool,
       ok: result.ok,
       url: result.content?.url ?? null,
+      source: result.content?.source ?? null,
+      sourceUrl: result.content?.sourceUrl ?? result.content?.url ?? null,
+      sources: summarizeToolSources(result),
       error: result.content?.error ?? null,
     })),
   };
+}
+
+function summarizeToolSources(result) {
+  if (result.tool === 'web_fetch' && result.content?.url) {
+    return [
+      {
+        title: result.content.title || result.content.url,
+        url: result.content.url,
+      },
+    ];
+  }
+
+  if (result.tool === 'web_search') {
+    return (result.content?.results ?? [])
+      .filter((item) => item?.url)
+      .slice(0, 5)
+      .map((item) => ({
+        title: item.title || item.url,
+        url: item.url,
+      }));
+  }
+
+  return [];
 }
 
 function getEnabledToolInstruction(enabledTools) {
