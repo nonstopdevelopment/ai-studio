@@ -43,7 +43,9 @@ export function normalizeEnabledTools(value) {
 }
 
 export async function buildToolContext({ prompt, enabledTools, signal, sourceHints = [] }) {
-  const enabled = normalizeEnabledTools(enabledTools);
+  const requestedTools = normalizeEnabledTools(enabledTools);
+  const shouldFetchSourceHints = sourceHints.length > 0 && toolPolicy.webFetchEnabled;
+  const enabled = shouldFetchSourceHints ? uniqueValues([...requestedTools, 'web_fetch']) : requestedTools;
   if (!toolPolicy.enabled || enabled.length === 0) {
     return { enabledTools: enabled, results: [], contextText: '' };
   }
@@ -68,11 +70,20 @@ export async function buildToolContext({ prompt, enabledTools, signal, sourceHin
     ]).slice(0, toolPolicy.maxUrlsPerRequest);
     for (const url of urls) {
       try {
+        const content = await webFetch({ url, signal });
         results.push({
           tool: 'web_fetch',
           ok: true,
-          content: await webFetch({ url, signal }),
+          content,
         });
+        const nextUrl = pickLinkedArticleUrl(prompt, content, url);
+        if (nextUrl && !urls.includes(nextUrl) && results.filter((result) => result.tool === 'web_fetch').length < toolPolicy.maxUrlsPerRequest) {
+          results.push({
+            tool: 'web_fetch',
+            ok: true,
+            content: await webFetch({ url: nextUrl, signal }),
+          });
+        }
       } catch (error) {
         results.push({
           tool: 'web_fetch',
@@ -87,7 +98,7 @@ export async function buildToolContext({ prompt, enabledTools, signal, sourceHin
     }
   }
 
-  if (enabled.includes('web_search')) {
+  if (enabled.includes('web_search') && sourceHints.length === 0) {
     results.push({
       tool: 'web_search',
       ok: true,
@@ -108,6 +119,38 @@ function extractUrls(text) {
 
 function uniqueUrls(urls) {
   return [...new Set(urls.map((url) => String(url).trim()).filter(Boolean))];
+}
+
+function uniqueValues(values) {
+  return [...new Set(values.map((value) => String(value)).filter(Boolean))];
+}
+
+function pickLinkedArticleUrl(prompt, fetchedContent, sourceUrl) {
+  if (!/\b(summarize|summary|what.*about|post|article|story)\b/i.test(String(prompt))) {
+    return null;
+  }
+
+  const sourceHost = getHost(sourceUrl);
+  return (
+    (fetchedContent.links ?? []).find((link) => {
+      const host = getHost(link.url);
+      return host && host !== sourceHost && !isUtilityLink(link);
+    })?.url ?? null
+  );
+}
+
+function getHost(url) {
+  try {
+    return new URL(url).hostname.replace(/^www\./, '');
+  } catch {
+    return '';
+  }
+}
+
+function isUtilityLink(link) {
+  return /\b(login|sign in|comments|reply|hide|more|past|new|jobs|submit|guidelines|privacy|terms)\b/i.test(
+    `${link.title} ${link.url}`
+  );
 }
 
 function formatToolContext(results) {

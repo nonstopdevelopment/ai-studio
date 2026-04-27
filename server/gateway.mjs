@@ -771,7 +771,8 @@ function summarizeToolSources(result) {
 }
 
 async function getThreadSourceHints(job) {
-  if (!job.body.threadId || !normalizeEnabledTools(job.body.enabledTools).includes('web_fetch')) {
+  const enabledTools = normalizeEnabledTools(job.body.enabledTools);
+  if (!job.body.threadId || !enabledTools.some((tool) => tool === 'web_fetch' || tool === 'web_search')) {
     return [];
   }
 

@@ -55,7 +55,8 @@ export async function webFetch({ url, signal }) {
         contentType,
         redirects: visited.slice(0, -1),
         title: extractTitle(rawText),
-        text: cleanFetchedText(rawText, contentType).slice(0, 12_000),
+        links: extractLinks(rawText, currentUrl).slice(0, 25),
+        text: cleanFetchedText(rawText, contentType, currentUrl).slice(0, 12_000),
       };
     } finally {
       clearTimeout(timeout);
@@ -99,7 +100,7 @@ function extractTitle(text) {
   return match ? decodeHtml(match[1]).replace(/\s+/g, ' ').trim().slice(0, 160) : '';
 }
 
-function cleanFetchedText(text, contentType) {
+function cleanFetchedText(text, contentType, baseUrl) {
   if (contentType === 'application/json') {
     try {
       return JSON.stringify(JSON.parse(text), null, 2);
@@ -118,6 +119,14 @@ function cleanFetchedText(text, contentType) {
       .replace(/<style[\s\S]*?<\/style>/gi, ' ')
       .replace(/<nav[\s\S]*?<\/nav>/gi, ' ')
       .replace(/<footer[\s\S]*?<\/footer>/gi, ' ')
+      .replace(/<a\b([^>]*)>([\s\S]*?)<\/a>/gi, (_match, attributes, label) => {
+        const href = extractHref(attributes, baseUrl);
+        const cleanLabel = label.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+        if (!href || !cleanLabel) {
+          return cleanLabel || ' ';
+        }
+        return `${cleanLabel} (${href})`;
+      })
       .replace(/<br\s*\/?>/gi, '\n')
       .replace(/<\/(p|div|section|article|h[1-6]|li)>/gi, '\n')
       .replace(/<[^>]+>/g, ' ')
@@ -126,6 +135,43 @@ function cleanFetchedText(text, contentType) {
     .replace(/\n\s+/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
+}
+
+function extractHref(attributes, baseUrl) {
+  const match = String(attributes).match(/\bhref\s*=\s*["']?([^"'\s>]+)/i);
+  if (!match) {
+    return '';
+  }
+
+  try {
+    return new URL(decodeHtml(match[1]), baseUrl).toString();
+  } catch {
+    return '';
+  }
+}
+
+function extractLinks(text, baseUrl) {
+  const links = [];
+  for (const match of String(text).matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a>/gi)) {
+    const href = extractHref(match[1], baseUrl);
+    const title = decodeHtml(match[2].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim());
+    if (href && title && /^https?:\/\//i.test(href)) {
+      links.push({ title, url: href });
+    }
+  }
+  return dedupeLinks(links);
+}
+
+function dedupeLinks(links) {
+  const seen = new Set();
+  return links.filter((link) => {
+    const key = link.url;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
 }
 
 function decodeHtml(value) {
