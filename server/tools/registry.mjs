@@ -42,7 +42,14 @@ export function normalizeEnabledTools(value) {
   return [...new Set(value.map((tool) => String(tool)).filter((tool) => available.has(tool)))];
 }
 
-export async function buildToolContext({ prompt, enabledTools, signal, sourceHints = [] }) {
+export async function buildToolContext({
+  prompt,
+  enabledTools,
+  signal,
+  sourceHints = [],
+  searchQuery = prompt,
+  fetchSearchResults = false,
+}) {
   const requestedTools = normalizeEnabledTools(enabledTools);
   const shouldFetchSourceHints = sourceHints.length > 0 && toolPolicy.webFetchEnabled;
   const enabled = shouldFetchSourceHints ? uniqueValues([...requestedTools, 'web_fetch']) : requestedTools;
@@ -114,13 +121,38 @@ export async function buildToolContext({ prompt, enabledTools, signal, sourceHin
     }
   }
 
-  if (enabled.includes('web_search') && sourceHints.length === 0) {
+  if (enabled.includes('web_search') && (sourceHints.length === 0 || fetchSearchResults)) {
     try {
+      const content = await webSearch({ query: searchQuery, signal });
       results.push({
         tool: 'web_search',
         ok: true,
-        content: await webSearch({ query: prompt, signal }),
+        content,
       });
+      if (fetchSearchResults && toolPolicy.webFetchEnabled) {
+        for (const result of pickSearchResultsToFetch(content)) {
+          if (results.filter((item) => item.tool === 'web_fetch').length >= toolPolicy.maxUrlsPerRequest) {
+            break;
+          }
+          try {
+            results.push({
+              tool: 'web_fetch',
+              ok: true,
+              content: await webFetch({ url: result.url, signal }),
+            });
+          } catch (error) {
+            results.push({
+              tool: 'web_fetch',
+              ok: false,
+              content: {
+                url: result.url,
+                error: error.publicCode || 'tool_failed',
+                message: error.publicMessage || 'The search result page could not be fetched.',
+              },
+            });
+          }
+        }
+      }
     } catch (error) {
       results.push({
         tool: 'web_search',
@@ -178,6 +210,35 @@ function getHost(url) {
 function isUtilityLink(link) {
   return /\b(login|sign in|comments|reply|hide|more|past|new|jobs|submit|guidelines|privacy|terms)\b/i.test(
     `${link.title} ${link.url}`
+  );
+}
+
+function pickSearchResultsToFetch(searchContent) {
+  return (searchContent.results ?? [])
+    .filter((result) => result?.url)
+    .filter((result) => !isGenericSearchResult(result))
+    .sort((left, right) => scoreSearchResult(right) - scoreSearchResult(left))
+    .slice(0, toolPolicy.maxUrlsPerRequest);
+}
+
+function scoreSearchResult(result) {
+  const haystack = `${result.title} ${result.url} ${result.snippet}`.toLowerCase();
+  const officialBoost = /\b(official|mlb\.com|rays|schedule|calendar|tickets|event|events|visit|city|busch|gardens|tampa)\b/i.test(
+    haystack
+  )
+    ? 12
+    : 0;
+  const detailBoost = /\b(date|dates|time|home|game|pricing|price|ticket|schedule|calendar|starts|ends)\b/i.test(
+    haystack
+  )
+    ? 8
+    : 0;
+  return officialBoost + detailBoost;
+}
+
+function isGenericSearchResult(result) {
+  return /\b(quillbot|summarizer|seat.?geek|skyscanner|google flights|cheap flights|instagram)\b/i.test(
+    `${result.title} ${result.url}`
   );
 }
 

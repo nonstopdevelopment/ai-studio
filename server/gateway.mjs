@@ -298,12 +298,14 @@ async function runJob(job) {
 
   try {
     releaseClusterSlot = await waitForClusterSlot(job, controller.signal);
-    const sourceHints = await getThreadSourceHints(job);
+    const toolPlan = await getToolPlan(job);
     job.toolContext = await buildToolContext({
       prompt: job.body.prompt,
       enabledTools: job.body.enabledTools,
       signal: controller.signal,
-      sourceHints,
+      sourceHints: toolPlan.sourceHints,
+      searchQuery: toolPlan.searchQuery,
+      fetchSearchResults: toolPlan.fetchSearchResults,
     });
     const toolSummary = summarizeToolContext(job.toolContext);
     const result =
@@ -770,24 +772,36 @@ function summarizeToolSources(result) {
   return [];
 }
 
-async function getThreadSourceHints(job) {
+async function getToolPlan(job) {
   const enabledTools = normalizeEnabledTools(job.body.enabledTools);
+  const emptyPlan = { sourceHints: [], searchQuery: job.body.prompt, fetchSearchResults: false };
   if (!job.body.threadId || !enabledTools.some((tool) => tool === 'web_fetch' || tool === 'web_search')) {
-    return [];
+    return emptyPlan;
   }
 
-  if (hasPromptUrl(job.body.prompt) || !looksLikeSourceFollowUp(job.body.prompt)) {
-    return [];
+  if (hasPromptUrl(job.body.prompt)) {
+    return emptyPlan;
   }
 
   const thread = await sharedStore.getThread(job.userId, job.body.threadId);
   const messages = thread?.messages ?? [];
-  const sources = getRecentMessageSources(messages);
-  if (sources.length === 0) {
-    return [];
+  const isFollowUp = looksLikeSourceFollowUp(job.body.prompt);
+  const searchQuery = isFollowUp ? buildFollowUpSearchQuery(job.body.prompt, messages) : job.body.prompt;
+
+  if (!isFollowUp) {
+    return { ...emptyPlan, searchQuery };
   }
 
-  return pickReferencedSources(job.body.prompt, sources, messages);
+  const sources = getRecentMessageSources(messages);
+  if (sources.length === 0) {
+    return { sourceHints: [], searchQuery, fetchSearchResults: true };
+  }
+
+  return {
+    sourceHints: pickReferencedSources(job.body.prompt, sources, messages),
+    searchQuery,
+    fetchSearchResults: true,
+  };
 }
 
 function getRecentMessageSources(messages) {
@@ -847,9 +861,56 @@ function hasPromptUrl(prompt) {
 }
 
 function looksLikeSourceFollowUp(prompt) {
-  return /\b(summarize|summary|explain|what does|what is|tell me about|that|this|post|article|page|link|source|result|website|site|pricing|price|ticket|tickets|date|dates|start|end|details|more info|look at|look up|find me)\b/i.test(
+  return /\b(summarize|summary|explain|what does|what is|tell me about|that|this|post|article|page|link|source|result|website|site|pricing|price|ticket|tickets|date|dates|start|end|details|more info|look at|look up|find me|when|where|home|away|game|games|schedule|calendar|next)\b/i.test(
     String(prompt)
   );
+}
+
+function buildFollowUpSearchQuery(prompt, messages) {
+  const recentText = [...messages]
+    .reverse()
+    .slice(0, 6)
+    .map((message) => message.content)
+    .reverse()
+    .join(' ');
+  const entities = extractQueryEntities(`${recentText} ${prompt}`);
+  return uniqueQueryTerms([...entities, prompt, 'official']).join(' ').slice(0, 240);
+}
+
+function extractQueryEntities(text) {
+  const value = String(text);
+  const entities = [];
+  const patterns = [
+    /\bTampa Bay Rays\b/gi,
+    /\bRays\b/gi,
+    /\bTampa Bay\b/gi,
+    /\bBusch Gardens\b/gi,
+    /\bFood,\s*Wine\s*&\s*Garden Festival\b/gi,
+    /\bTampa Riverwalk\b/gi,
+    /\bVisit Tampa Bay\b/gi,
+  ];
+
+  for (const pattern of patterns) {
+    for (const match of value.matchAll(pattern)) {
+      entities.push(match[0]);
+    }
+  }
+  return entities;
+}
+
+function uniqueQueryTerms(values) {
+  const seen = new Set();
+  return values
+    .map((value) => String(value).replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+    .filter((value) => {
+      const key = value.toLowerCase();
+      if (seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    });
 }
 
 function getRecentReferenceText(prompt, messages) {
