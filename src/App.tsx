@@ -43,6 +43,14 @@ type GatewayStatus = {
   };
 };
 
+type GatewayTool = {
+  name: string;
+  title: string;
+  description: string;
+  source: 'system' | string;
+  available: boolean;
+};
+
 type GeneratedArtifact = {
   id: string;
   title: string;
@@ -530,6 +538,8 @@ export function App() {
   const [activeThreadId, setActiveThreadId] = useState('new-thread');
   const [, setStatusText] = useState('');
   const [gatewayStatus, setGatewayStatus] = useState<GatewayStatus | null>(null);
+  const [gatewayTools, setGatewayTools] = useState<GatewayTool[]>([]);
+  const [enabledTools, setEnabledTools] = useState<string[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
   const [sessionId, setSessionId] = useState(createTabSessionId);
   const [createArtifact, setCreateArtifact] = useState(false);
@@ -678,11 +688,83 @@ export function App() {
   }, [authToken]);
 
   useEffect(() => {
+    let canceled = false;
+
+    async function loadTools() {
+      if (!authToken && authConfig?.authMode === 'required') {
+        return;
+      }
+
+      try {
+        const response = await fetch('/api/tools', {
+          headers: getAuthHeaders(authToken, sessionId),
+        });
+        const body = await response.json();
+        if (!response.ok) {
+          return;
+        }
+
+        if (!canceled && Array.isArray(body.tools)) {
+          const tools = body.tools as GatewayTool[];
+          setGatewayTools(tools);
+          setEnabledTools(() => {
+            const available = new Set(tools.filter((tool) => tool.available).map((tool) => tool.name));
+            return Array.isArray(body.enabledTools)
+              ? body.enabledTools.map(String).filter((toolName: string) => available.has(toolName))
+              : [];
+          });
+        }
+      } catch {
+        if (!canceled) {
+          setGatewayTools([]);
+          setEnabledTools([]);
+        }
+      }
+    }
+
+    void loadTools();
+    return () => {
+      canceled = true;
+    };
+  }, [authToken, authConfig?.authMode, sessionId]);
+
+  useEffect(() => {
     threadEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [messages, isGenerating]);
 
   function applyGatewayStatus(nextStatus: GatewayStatus) {
     setGatewayStatus(nextStatus);
+  }
+
+  async function toggleEnabledTool(toolName: string) {
+    const nextTools = enabledTools.includes(toolName)
+      ? enabledTools.filter((name) => name !== toolName)
+      : [...enabledTools, toolName];
+    setEnabledTools(nextTools);
+
+    try {
+      const response = await fetch('/api/tools/preferences', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          ...getAuthHeaders(authToken, sessionId),
+        },
+        body: JSON.stringify({ enabledTools: nextTools }),
+      });
+      const body = await response.json();
+      if (!response.ok) {
+        throw new Error(body.message ?? body.error ?? 'Could not save tool preferences.');
+      }
+      if (Array.isArray(body.enabledTools)) {
+        setEnabledTools(body.enabledTools.map(String));
+      }
+    } catch (error) {
+      setStatusText(formatClientError(error));
+    }
+  }
+
+  function openToolSettings() {
+    setShowComposerTools(true);
   }
 
   async function signIn() {
@@ -728,7 +810,7 @@ export function App() {
   }
 
   function startNewChat() {
-    if (!isSignedIn) {
+    if (authConfig?.authMode === 'required' && !isSignedIn) {
       setAuthStatus('Sign in with Tampa.dev to start a private chat.');
       return;
     }
@@ -825,7 +907,7 @@ export function App() {
   }
 
   async function submitPrompt() {
-    if (!isSignedIn) {
+    if (!canUseStudio) {
       setAuthStatus('Sign in with Tampa.dev to continue.');
       return;
     }
@@ -884,6 +966,7 @@ export function App() {
           sampleResponse: activeWorkflow.sampleResponse,
           createArtifact,
           outputFormat,
+          enabledTools,
         }),
       });
 
@@ -951,6 +1034,7 @@ export function App() {
 
   const hasStartedChat = messages.some((message) => message.role === 'user');
   const isSignedIn = Boolean(authProfile?.authenticated && authToken);
+  const canUseStudio = isSignedIn || authConfig?.authMode !== 'required';
   const askWorkflows = workflowCards.filter((workflow) => workflow.mode === 'ask');
   const draftWorkflow = workflowCards.find((workflow) => workflow.id === 'deployment-brief') ?? workflowCards[0];
 
@@ -974,7 +1058,7 @@ export function App() {
           </strong>
         </div>
 
-        <button className="new-chat-button" type="button" onClick={startNewChat} disabled={isGenerating || !isSignedIn}>
+        <button className="new-chat-button" type="button" onClick={startNewChat} disabled={isGenerating || !canUseStudio}>
           <span>+</span>
           New Chat
         </button>
@@ -1011,6 +1095,38 @@ export function App() {
           </div>
         </section>
 
+        {isSignedIn ? (
+          <section className="workspace-system-tools">
+            <span>System Tools</span>
+            {gatewayTools.length === 0 ? <p>No gateway tools are available in this environment.</p> : null}
+            <div className="system-tool-list">
+              {gatewayTools.map((tool) => (
+                <label
+                  key={tool.name}
+                  className={[
+                    'system-tool-row',
+                    enabledTools.includes(tool.name) ? 'is-active' : '',
+                    !tool.available ? 'is-disabled' : '',
+                  ]
+                    .filter(Boolean)
+                    .join(' ')}
+                >
+                  <input
+                    type="checkbox"
+                    checked={enabledTools.includes(tool.name)}
+                    disabled={!tool.available}
+                    onChange={() => void toggleEnabledTool(tool.name)}
+                  />
+                  <span>
+                    <strong>{tool.title}</strong>
+                    <small>{tool.source === 'system' ? 'Provided by Tampa.dev AI' : tool.source}</small>
+                  </span>
+                </label>
+              ))}
+            </div>
+          </section>
+        ) : null}
+
         <section className="identity-card">
           <div className="identity-avatar">
             {authProfile?.name?.slice(0, 1).toUpperCase() || (authProfile?.authenticated ? 'T' : 'G')}
@@ -1045,16 +1161,22 @@ export function App() {
             </button>
             <strong>Tampa Devs AI</strong>
           </div>
-          <div className="workspace-status">
-            <span>{gatewayStatus?.modelName ?? clusterPolicy.modelName}</span>
-            <span className="status-dot status-dot--online" />
-            <strong>{gatewayStatus?.mode === 'live' ? 'Online' : gatewayStatus?.mode ?? 'Offline'}</strong>
+          <div className="workspace-topbar__actions">
+            <button className="topbar-tool-button" type="button" onClick={openToolSettings} disabled={!canUseStudio}>
+              Tools
+              {enabledTools.length > 0 ? <span>{enabledTools.length}</span> : null}
+            </button>
+            <div className="workspace-status">
+              <span>{gatewayStatus?.modelName ?? clusterPolicy.modelName}</span>
+              <span className="status-dot status-dot--online" />
+              <strong>{gatewayStatus?.mode === 'live' ? 'Online' : gatewayStatus?.mode ?? 'Offline'}</strong>
+            </div>
           </div>
         </header>
 
         <main className="workspace-chat">
           <section className="workspace-thread" aria-label="Conversation thread">
-            {!isSignedIn ? (
+            {!canUseStudio ? (
               <div className="signin-panel">
                 <span className="hero-logo">
                   <img src="/ontampa-pirate.png" alt="" />
@@ -1121,6 +1243,14 @@ export function App() {
           {authStatus && !isSignedIn ? <div className="workspace-notice">{authStatus}</div> : null}
           {showComposerTools ? (
             <div className="workspace-tools">
+              <div className="workspace-tools__header">
+                <span>Tools</span>
+                <small>
+                  {gatewayTools.length > 0
+                    ? 'System-provided tools are saved to your workspace.'
+                    : 'No system tools are being advertised by the gateway.'}
+                </small>
+              </div>
               <button
                 className={activeMode === 'ask' ? 'tool-chip is-active' : 'tool-chip'}
                 type="button"
@@ -1153,6 +1283,28 @@ export function App() {
                   <span>Create file</span>
                 </label>
               ) : null}
+              <span className="workspace-tools-divider" aria-hidden="true" />
+              {gatewayTools.map((tool) => (
+                <button
+                  key={tool.name}
+                  className={[
+                    'tool-chip',
+                    enabledTools.includes(tool.name) ? 'is-active' : '',
+                    !tool.available ? 'is-disabled' : '',
+                  ]
+                    .filter(Boolean)
+                    .join(' ')}
+                  type="button"
+                  onClick={() => void toggleEnabledTool(tool.name)}
+                  disabled={!tool.available}
+                  title={tool.description}
+                >
+                  {tool.title}
+                </button>
+              ))}
+              {gatewayTools.length === 0 ? (
+                <span className="workspace-tools-empty">Restart the API with AI_TOOLS_ENABLED=true.</span>
+              ) : null}
               {generatedArtifact ? (
                 <a className="workspace-file-link" href={generatedArtifact.url} target="_blank" rel="noreferrer">
                   {generatedArtifact.filename}
@@ -1171,7 +1323,7 @@ export function App() {
                 }
               }}
               placeholder="Ask anything"
-              disabled={!isSignedIn || isGenerating}
+              disabled={!canUseStudio || isGenerating}
               rows={3}
             />
             <div className="composer-buttons">
@@ -1180,11 +1332,11 @@ export function App() {
                 type="button"
                 onClick={() => setShowComposerTools((current) => !current)}
                 aria-label="Show tools"
-                disabled={!isSignedIn}
+                disabled={!canUseStudio}
               >
                 +
               </button>
-              <button type="button" disabled={isGenerating || !isSignedIn} onClick={submitPrompt} aria-label="Send message">
+              <button type="button" disabled={isGenerating || !canUseStudio} onClick={submitPrompt} aria-label="Send message">
               {isGenerating ? '…' : '➤'}
               </button>
             </div>

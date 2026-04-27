@@ -99,6 +99,44 @@ Supported output formats are:
 - `text`: shown as plain text and saved as `.txt`.
 - `json`: requested as valid JSON, shown as raw JSON, and saved as `.json`.
 
+## Local Server Tools Prototype
+
+The gateway has a local-first tool registry for capabilities that can be enabled per request. Tools are server-side only: the browser can toggle the tool, but the gateway owns validation, execution, and prompt enrichment.
+
+Enable the prototype locally:
+
+```bash
+AI_TOOLS_ENABLED=true \
+AI_TOOL_WEB_FETCH_ENABLED=true \
+pnpm dev:api
+```
+
+Available prototype tools:
+
+- `time_now`: adds the current gateway time to the model context.
+- `web_fetch`: fetches HTTPS URLs included in the prompt, with a gateway policy that blocks localhost/private network targets, unsupported content types, oversized responses, credential URLs, and non-HTTPS URLs.
+
+Tool preference endpoints:
+
+- `GET /api/tools`: returns system-provided tools plus the current user's enabled tool names.
+- `POST /api/tools/preferences`: saves `{ "enabledTools": ["time_now"] }` for the current user/workspace.
+
+Useful local safety knobs:
+
+```bash
+AI_TOOL_ALLOWED_DOMAINS=*
+AI_TOOL_BLOCKED_DOMAINS=example.internal,corp.local
+AI_TOOL_MAX_FETCH_BYTES=250000
+AI_TOOL_FETCH_TIMEOUT_MS=8000
+AI_TOOL_MAX_REDIRECTS=2
+AI_TOOL_MAX_URLS_PER_REQUEST=2
+```
+
+Next planned local tools:
+
+- `web_search`: call a self-hosted SearXNG instance instead of a paid search API.
+- `mcp_connector`: expose admin-approved MCP servers through the same gateway policy layer.
+
 For OKD with more than one gateway replica, replace these local-only stores:
 
 - Session memory: use Redis, Postgres, or another shared session store keyed by `sessionId`.
@@ -154,6 +192,7 @@ Useful safety knobs:
 - `GATEWAY_MAX_CONCURRENT=1`
 - `GATEWAY_MAX_QUEUE_DEPTH=6`
 - `GATEWAY_PER_USER_CONCURRENT=1`
+- `GATEWAY_PER_USER_QUEUED=1`
 - `GATEWAY_PER_USER_RPM=6`
 - `GATEWAY_REQUEST_TIMEOUT_MS=120000`
 - `GATEWAY_MAX_OUTPUT_TOKENS=768`
@@ -189,6 +228,7 @@ For a single active model, this is the safest place to start if two people might
 ## Suggested Gateway Behavior
 
 - If one request is active and a second arrives, enqueue it.
+- If one user already has a running or queued request, return `429` so they cannot monopolize the shared model lane.
 - If the queue is full, return `429 Too Many Requests` with a short retry hint.
 - Expose current `activeRequests`, `queueDepth`, `estimatedWaitMs`, and `modelName` from `/api/status`.
 - Log `requestId`, `userId`, `workflowId`, latency, token counts, cancel reason, and final status.

@@ -4,6 +4,7 @@ import { createServer } from 'node:http';
 import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createClient } from 'redis';
+import { buildToolContext, getPublicTools, normalizeEnabledTools } from './tools/registry.mjs';
 
 const rootDir = fileURLToPath(new URL('..', import.meta.url));
 const distDir = join(rootDir, 'dist');
@@ -39,6 +40,7 @@ const policy = {
   maxConcurrentClusterRequests: readInt('GATEWAY_MAX_CONCURRENT', 1),
   maxQueueDepth: readInt('GATEWAY_MAX_QUEUE_DEPTH', 6),
   perUserConcurrentRequests: readInt('GATEWAY_PER_USER_CONCURRENT', 1),
+  perUserQueuedRequests: readInt('GATEWAY_PER_USER_QUEUED', 1),
   perUserRequestsPerMinute: readInt('GATEWAY_PER_USER_RPM', 6),
   minIntervalMs: readInt('GATEWAY_MIN_INTERVAL_MS', 2500),
   requestTimeoutMs: readInt('GATEWAY_REQUEST_TIMEOUT_MS', 120000),
@@ -53,6 +55,7 @@ const state = {
   failedRequests: 0,
   queue: [],
   perUserInflight: new Map(),
+  perUserQueued: new Map(),
   perUserWindows: new Map(),
   sessions: new Map(),
   artifacts: new Map(),
@@ -77,6 +80,14 @@ const server = createServer(async (request, response) => {
 
     if (request.method === 'GET' && url.pathname === '/api/status') {
       return sendJson(response, 200, getStatus());
+    }
+
+    if (request.method === 'GET' && url.pathname === '/api/tools') {
+      return handleListTools(request, response);
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/tools/preferences') {
+      return handleSaveToolPreferences(request, response);
     }
 
     if (request.method === 'GET' && url.pathname === '/api/auth/config') {
@@ -156,6 +167,9 @@ async function handleGenerate(request, response) {
   const userId = identity.user.id;
   const body = await readJsonBody(request);
   const prompt = String(body.prompt ?? '').trim();
+  const requestedTools = Object.hasOwn(body, 'enabledTools')
+    ? normalizeEnabledTools(body.enabledTools)
+    : normalizeEnabledTools(await sharedStore.getToolPreferences(userId));
 
   if (!prompt) {
     return sendJson(response, 400, { error: 'prompt_required' });
@@ -203,9 +217,11 @@ async function handleGenerate(request, response) {
         createArtifact: Boolean(body.createArtifact),
         outputFormat: normalizeOutputFormat(body.outputFormat),
         threadId,
+        enabledTools: requestedTools,
       },
     };
 
+    incrementQueued(job.userId);
     state.queue.push(job);
     processQueue();
   });
@@ -227,6 +243,7 @@ function processQueue() {
     return;
   }
 
+  decrementQueued(job.userId);
   state.activeRequests += 1;
   state.lastStartAt = Date.now();
   job.startedAt = state.lastStartAt;
@@ -281,6 +298,11 @@ async function runJob(job) {
 
   try {
     releaseClusterSlot = await waitForClusterSlot(job, controller.signal);
+    job.toolContext = await buildToolContext({
+      prompt: job.body.prompt,
+      enabledTools: job.body.enabledTools,
+      signal: controller.signal,
+    });
     const result =
       policy.mode === 'live'
         ? await generateWithVllm(job, controller.signal)
@@ -329,6 +351,7 @@ async function runJob(job) {
       artifact,
       memory: await sharedStore.getSessionSummary(job.body.sessionId),
       usage: result.usage,
+      tools: summarizeToolContext(job.toolContext),
       status: getProjectedCompletionStatus(),
     });
   } finally {
@@ -337,6 +360,39 @@ async function runJob(job) {
     }
     clearTimeout(timeout);
   }
+}
+
+async function handleListTools(request, response) {
+  const identity = await resolveIdentity(request);
+  if (!identity.ok) {
+    return sendJson(response, identity.statusCode, identity.body);
+  }
+
+  const enabledTools = normalizeEnabledTools(await sharedStore.getToolPreferences(identity.user.id));
+  return sendJson(response, 200, {
+    ownerId: identity.user.id,
+    authenticated: identity.user.authenticated,
+    tools: getPublicTools(),
+    enabledTools,
+  });
+}
+
+async function handleSaveToolPreferences(request, response) {
+  const identity = await resolveIdentity(request);
+  if (!identity.ok) {
+    return sendJson(response, identity.statusCode, identity.body);
+  }
+
+  const body = await readJsonBody(request);
+  const enabledTools = normalizeEnabledTools(body.enabledTools);
+  await sharedStore.saveToolPreferences(identity.user.id, enabledTools);
+
+  return sendJson(response, 200, {
+    ownerId: identity.user.id,
+    authenticated: identity.user.authenticated,
+    tools: getPublicTools(),
+    enabledTools,
+  });
 }
 
 async function handleTokenExchange(request, response) {
@@ -517,6 +573,7 @@ function summarizeJob(job, status) {
     queuedMs: (job.startedAt ?? now) - job.queuedAt,
     runningMs: job.startedAt ? now - job.startedAt : 0,
     promptChars: job.body.prompt.length,
+    queuePosition: status === 'queued' ? state.queue.findIndex((item) => item.requestId === job.requestId) + 1 : null,
   };
 }
 
@@ -563,10 +620,13 @@ function percentile(values, pct) {
 
 async function generateWithMock(job, signal) {
   await sleep(650, signal);
+  const toolNote = job.toolContext?.contextText
+    ? `\n\nLocal tool context was attached for this mock run:\n\n${job.toolContext.contextText.slice(0, 1200)}`
+    : '';
   return {
     text:
       job.body.sampleResponse ||
-      `Mock gateway response for ${job.body.workflowTitle}. The queue protected this request before it reached the model lane.`,
+      `Mock gateway response for ${job.body.workflowTitle}. The queue protected this request before it reached the model lane.${toolNote}`,
     usage: {
       promptTokens: Math.ceil(job.body.prompt.length / 4),
       completionTokens: Math.ceil((job.body.sampleResponse || '').length / 4),
@@ -601,9 +661,25 @@ async function generateWithVllm(job, signal) {
         {
           role: 'system',
           content:
-            'You are Tampa Devs AI Studio, running on a community private cloud. For normal chat, answer directly in 1-3 short paragraphs unless the user asks for depth. For generated artifacts, produce clean Markdown with headings, lists, and concrete next steps.',
+            'You are Tampa Devs AI Studio, running on a community private cloud. For normal chat, answer directly in 1-3 short paragraphs unless the user asks for depth. For generated artifacts, produce clean Markdown with headings, lists, and concrete next steps. If gateway tool context is provided, use it as fresh external context and cite the source URL or tool name in plain language.',
         },
         ...(await getConversationHistory(job)),
+        ...(job.body.enabledTools.length > 0
+          ? [
+              {
+                role: 'system',
+                content: getEnabledToolInstruction(job.body.enabledTools),
+              },
+            ]
+          : []),
+        ...(job.toolContext?.contextText
+          ? [
+              {
+                role: 'system',
+                content: job.toolContext.contextText,
+              },
+            ]
+          : []),
         {
           role: 'user',
           content: `${job.body.prompt}\n\n${getFormatInstruction(job.body.outputFormat)}`,
@@ -626,6 +702,37 @@ async function generateWithVllm(job, signal) {
     text: payload?.choices?.[0]?.message?.content ?? '',
     usage: payload?.usage ?? null,
   };
+}
+
+function summarizeToolContext(toolContext) {
+  return {
+    enabledTools: toolContext?.enabledTools ?? [],
+    results: (toolContext?.results ?? []).map((result) => ({
+      tool: result.tool,
+      ok: result.ok,
+      url: result.content?.url ?? null,
+      error: result.content?.error ?? null,
+    })),
+  };
+}
+
+function getEnabledToolInstruction(enabledTools) {
+  const lines = [
+    `Gateway tools enabled for this request: ${enabledTools.join(', ')}.`,
+    'Use gateway tool context when it is present. Do not claim you browsed or fetched a page unless gateway tool context includes that result.',
+  ];
+
+  if (enabledTools.includes('web_fetch')) {
+    lines.push(
+      'web_fetch can fetch HTTPS URLs that the user includes in their prompt. If the user asks for online information without a URL, ask for a URL or explain that web search is not enabled yet.'
+    );
+  }
+
+  if (enabledTools.includes('time_now')) {
+    lines.push('time_now provides the current gateway time for date-aware answers.');
+  }
+
+  return lines.join('\n');
 }
 
 async function getConversationHistory(job) {
@@ -789,6 +896,19 @@ async function checkUserLimits(userId) {
       ok: false,
       body: {
         error: 'user_request_inflight',
+        message: 'You already have a message running against the shared model.',
+        retryAfterMs: estimateWaitMs(),
+        status: getStatus(),
+      },
+    };
+  }
+
+  if ((state.perUserQueued.get(userId) ?? 0) >= policy.perUserQueuedRequests) {
+    return {
+      ok: false,
+      body: {
+        error: 'user_request_queued',
+        message: 'You already have a message waiting in the shared model queue.',
         retryAfterMs: estimateWaitMs(),
         status: getStatus(),
       },
@@ -813,6 +933,7 @@ function getStatus() {
       maxConcurrentClusterRequests: policy.maxConcurrentClusterRequests,
       maxQueueDepth: policy.maxQueueDepth,
       perUserConcurrentRequests: policy.perUserConcurrentRequests,
+      perUserQueuedRequests: policy.perUserQueuedRequests,
       perUserRequestsPerMinute: policy.perUserRequestsPerMinute,
       minIntervalMs: policy.minIntervalMs,
       requestTimeoutMs: policy.requestTimeoutMs,
@@ -1132,6 +1253,12 @@ function createMemorySharedStore() {
     async getArtifact(artifactId) {
       return state.artifacts.get(artifactId) ?? null;
     },
+    async getToolPreferences(userId) {
+      return state.sessions.get(getToolPreferencesKey(userId)) ?? [];
+    },
+    async saveToolPreferences(userId, enabledTools) {
+      state.sessions.set(getToolPreferencesKey(userId), normalizeEnabledTools(enabledTools));
+    },
   };
 }
 
@@ -1329,6 +1456,17 @@ function createRedisSharedStore(client) {
     async getArtifact(artifactId) {
       return safeJsonParse(await client.get(key('artifact', sanitizeId(artifactId))));
     },
+    async getToolPreferences(userId) {
+      const body = safeJsonParse(await client.get(key('user', sanitizeId(userId), 'tool-preferences')));
+      return Array.isArray(body?.enabledTools) ? body.enabledTools : [];
+    },
+    async saveToolPreferences(userId, enabledTools) {
+      await client.set(
+        key('user', sanitizeId(userId), 'tool-preferences'),
+        JSON.stringify({ enabledTools: normalizeEnabledTools(enabledTools), updatedAt: new Date().toISOString() }),
+        { EX: threadTtlSeconds }
+      );
+    },
   };
 }
 
@@ -1338,6 +1476,10 @@ function getThreadIndexKey(userId) {
 
 function getMemoryUserThreads(userId) {
   return state.sessions.get(getThreadIndexKey(userId)) ?? [];
+}
+
+function getToolPreferencesKey(userId) {
+  return `tool-preferences:${sanitizeId(userId)}`;
 }
 
 async function saveRedisThread(client, key, userId, thread) {
@@ -1388,6 +1530,19 @@ function cleanConversationMessages(messages) {
 function estimateWaitMs() {
   const activeDelay = state.activeRequests > 0 ? policy.requestTimeoutMs / 2 : 0;
   return Math.ceil(activeDelay + state.queue.length * Math.max(policy.minIntervalMs, 1000));
+}
+
+function incrementQueued(userId) {
+  state.perUserQueued.set(userId, (state.perUserQueued.get(userId) ?? 0) + 1);
+}
+
+function decrementQueued(userId) {
+  const nextValue = Math.max(0, (state.perUserQueued.get(userId) ?? 0) - 1);
+  if (nextValue === 0) {
+    state.perUserQueued.delete(userId);
+  } else {
+    state.perUserQueued.set(userId, nextValue);
+  }
 }
 
 function incrementInflight(userId) {
