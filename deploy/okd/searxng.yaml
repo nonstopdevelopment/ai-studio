@@ -40,9 +40,21 @@ spec:
       labels:
         app: ai-studio-searxng
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001170000
+        runAsGroup: 1001170000
+        fsGroup: 1001170000
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: searxng
           image: docker.io/searxng/searxng:latest
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
           ports:
             - name: http
               containerPort: 8080
