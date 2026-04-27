@@ -781,13 +781,13 @@ async function getThreadSourceHints(job) {
   }
 
   const thread = await sharedStore.getThread(job.userId, job.body.threadId);
-  const sources = getRecentMessageSources(thread?.messages ?? []);
+  const messages = thread?.messages ?? [];
+  const sources = getRecentMessageSources(messages);
   if (sources.length === 0) {
     return [];
   }
 
-  const source = pickReferencedSource(job.body.prompt, sources);
-  return source ? [source] : [];
+  return pickReferencedSources(job.body.prompt, sources, messages);
 }
 
 function getRecentMessageSources(messages) {
@@ -820,14 +820,26 @@ function dedupeSources(sources) {
   });
 }
 
-function pickReferencedSource(prompt, sources) {
+function pickReferencedSources(prompt, sources, messages) {
   const text = String(prompt).toLowerCase();
   const ordinalIndex =
     text.match(/\b(first|1st|one)\b/) ? 0 :
     text.match(/\b(second|2nd|two)\b/) ? 1 :
     text.match(/\b(third|3rd|three)\b/) ? 2 :
     null;
-  return sources[ordinalIndex ?? 0] ?? null;
+  if (ordinalIndex !== null) {
+    return sources[ordinalIndex] ? [sources[ordinalIndex]] : [];
+  }
+
+  const referenceText = getRecentReferenceText(prompt, messages);
+  return sources
+    .map((source, index) => ({
+      source,
+      score: scoreSourceForReference(source, referenceText, index),
+    }))
+    .sort((left, right) => right.score - left.score)
+    .slice(0, 2)
+    .map((item) => item.source);
 }
 
 function hasPromptUrl(prompt) {
@@ -835,9 +847,37 @@ function hasPromptUrl(prompt) {
 }
 
 function looksLikeSourceFollowUp(prompt) {
-  return /\b(summarize|summary|explain|what does|what is|tell me about|that|this|post|article|page|link|source|result)\b/i.test(
+  return /\b(summarize|summary|explain|what does|what is|tell me about|that|this|post|article|page|link|source|result|website|site|pricing|price|ticket|tickets|date|dates|start|end|details|more info|look at|look up|find me)\b/i.test(
     String(prompt)
   );
+}
+
+function getRecentReferenceText(prompt, messages) {
+  const recentUserText = [...messages]
+    .reverse()
+    .filter((message) => message.role === 'user')
+    .slice(0, 3)
+    .map((message) => message.content)
+    .reverse()
+    .join(' ');
+  return `${recentUserText} ${prompt}`.toLowerCase();
+}
+
+function scoreSourceForReference(source, referenceText, index) {
+  const haystack = `${source.title} ${source.url}`.toLowerCase();
+  const terms = referenceText.match(/[a-z0-9]{4,}/g) ?? [];
+  const overlap = terms.reduce((score, term) => score + (haystack.includes(term) ? 3 : 0), 0);
+  const officialBoost = /\b(official|visit|city|calendar|events|busch|gardens|tampa|riverwalk|stpete|clearwater)\b/i.test(
+    haystack
+  )
+    ? 8
+    : 0;
+  const genericPenalty = /\b(quillbot|summarizer|seat.?geek|ticketmaster|skyscanner|google flights|cheap flights)\b/i.test(
+    haystack
+  )
+    ? 20
+    : 0;
+  return overlap + officialBoost - genericPenalty - index;
 }
 
 function getEnabledToolInstruction(enabledTools) {

@@ -1168,7 +1168,7 @@ export function App() {
               }
             : message
         );
-        updateThread(nextMessages);
+        updateThread(nextMessages, undefined, requestThreadId);
         return nextMessages;
       });
     } catch (error) {
@@ -1184,7 +1184,7 @@ export function App() {
               }
             : item
         );
-        updateThread(nextMessages);
+        updateThread(nextMessages, undefined, requestThreadId);
         return nextMessages;
       });
     } finally {
