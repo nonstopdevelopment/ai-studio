@@ -42,7 +42,7 @@ export function normalizeEnabledTools(value) {
   return [...new Set(value.map((tool) => String(tool)).filter((tool) => available.has(tool)))];
 }
 
-export async function buildToolContext({ prompt, enabledTools, signal }) {
+export async function buildToolContext({ prompt, enabledTools, signal, sourceHints = [] }) {
   const enabled = normalizeEnabledTools(enabledTools);
   if (!toolPolicy.enabled || enabled.length === 0) {
     return { enabledTools: enabled, results: [], contextText: '' };
@@ -62,7 +62,10 @@ export async function buildToolContext({ prompt, enabledTools, signal }) {
   }
 
   if (enabled.includes('web_fetch')) {
-    const urls = extractUrls(prompt).slice(0, toolPolicy.maxUrlsPerRequest);
+    const urls = uniqueUrls([
+      ...extractUrls(prompt),
+      ...sourceHints.map((hint) => hint?.url).filter(Boolean),
+    ]).slice(0, toolPolicy.maxUrlsPerRequest);
     for (const url of urls) {
       try {
         results.push({
@@ -101,6 +104,10 @@ export async function buildToolContext({ prompt, enabledTools, signal }) {
 
 function extractUrls(text) {
   return [...String(text).matchAll(/https?:\/\/[^\s<>"')]+/g)].map((match) => match[0]);
+}
+
+function uniqueUrls(urls) {
+  return [...new Set(urls.map((url) => String(url).trim()).filter(Boolean))];
 }
 
 function formatToolContext(results) {

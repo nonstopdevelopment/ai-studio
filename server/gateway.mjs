@@ -298,11 +298,14 @@ async function runJob(job) {
 
   try {
     releaseClusterSlot = await waitForClusterSlot(job, controller.signal);
+    const sourceHints = await getThreadSourceHints(job);
     job.toolContext = await buildToolContext({
       prompt: job.body.prompt,
       enabledTools: job.body.enabledTools,
       signal: controller.signal,
+      sourceHints,
     });
+    const toolSummary = summarizeToolContext(job.toolContext);
     const result =
       policy.mode === 'live'
         ? await generateWithVllm(job, controller.signal)
@@ -322,6 +325,7 @@ async function runJob(job) {
         id: `assistant-${job.requestId}`,
         role: 'assistant',
         content: result.text,
+        toolCalls: toolSummary.results,
       });
       await sharedStore.touchThread(job.userId, {
         id: job.body.threadId,
@@ -351,7 +355,7 @@ async function runJob(job) {
       artifact,
       memory: await sharedStore.getSessionSummary(job.body.sessionId),
       usage: result.usage,
-      tools: summarizeToolContext(job.toolContext),
+      tools: toolSummary,
       status: getProjectedCompletionStatus(),
     });
   } finally {
@@ -719,6 +723,30 @@ function summarizeToolContext(toolContext) {
   };
 }
 
+function normalizeStoredToolCalls(toolCalls) {
+  if (!Array.isArray(toolCalls)) {
+    return [];
+  }
+
+  return toolCalls.map((toolCall) => ({
+    tool: String(toolCall.tool ?? ''),
+    ok: Boolean(toolCall.ok),
+    url: toolCall.url ? String(toolCall.url) : null,
+    source: toolCall.source ? String(toolCall.source) : null,
+    sourceUrl: toolCall.sourceUrl ? String(toolCall.sourceUrl) : null,
+    sources: Array.isArray(toolCall.sources)
+      ? toolCall.sources
+          .filter((source) => source?.url)
+          .slice(0, 5)
+          .map((source) => ({
+            title: String(source.title || source.url),
+            url: String(source.url),
+          }))
+      : [],
+    error: toolCall.error ? String(toolCall.error) : null,
+  }));
+}
+
 function summarizeToolSources(result) {
   if (result.tool === 'web_fetch' && result.content?.url) {
     return [
@@ -740,6 +768,75 @@ function summarizeToolSources(result) {
   }
 
   return [];
+}
+
+async function getThreadSourceHints(job) {
+  if (!job.body.threadId || !normalizeEnabledTools(job.body.enabledTools).includes('web_fetch')) {
+    return [];
+  }
+
+  if (hasPromptUrl(job.body.prompt) || !looksLikeSourceFollowUp(job.body.prompt)) {
+    return [];
+  }
+
+  const thread = await sharedStore.getThread(job.userId, job.body.threadId);
+  const sources = getRecentMessageSources(thread?.messages ?? []);
+  if (sources.length === 0) {
+    return [];
+  }
+
+  const source = pickReferencedSource(job.body.prompt, sources);
+  return source ? [source] : [];
+}
+
+function getRecentMessageSources(messages) {
+  const sources = [];
+  for (const message of [...messages].reverse()) {
+    for (const toolCall of [...(message.toolCalls ?? [])].reverse()) {
+      for (const source of toolCall.sources ?? []) {
+        if (source?.url) {
+          sources.push({
+            title: source.title || source.url,
+            url: source.url,
+            tool: toolCall.tool,
+          });
+        }
+      }
+    }
+  }
+  return dedupeSources(sources).slice(0, 10);
+}
+
+function dedupeSources(sources) {
+  const seen = new Set();
+  return sources.filter((source) => {
+    const key = source.url;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
+function pickReferencedSource(prompt, sources) {
+  const text = String(prompt).toLowerCase();
+  const ordinalIndex =
+    text.match(/\b(first|1st|one)\b/) ? 0 :
+    text.match(/\b(second|2nd|two)\b/) ? 1 :
+    text.match(/\b(third|3rd|three)\b/) ? 2 :
+    null;
+  return sources[ordinalIndex ?? 0] ?? null;
+}
+
+function hasPromptUrl(prompt) {
+  return /https?:\/\/[^\s<>"')]+/i.test(String(prompt));
+}
+
+function looksLikeSourceFollowUp(prompt) {
+  return /\b(summarize|summary|explain|what does|what is|tell me about|that|this|post|article|page|link|source|result)\b/i.test(
+    String(prompt)
+  );
 }
 
 function getEnabledToolInstruction(enabledTools) {
@@ -1250,6 +1347,7 @@ function createMemorySharedStore() {
           id: message.id || randomUUID(),
           role: message.role === 'assistant' ? 'assistant' : 'user',
           content: String(message.content ?? ''),
+          toolCalls: normalizeStoredToolCalls(message.toolCalls),
           state: 'done',
           at: new Date().toISOString(),
         },
@@ -1406,6 +1504,7 @@ function createRedisSharedStore(client) {
             id: message.id || randomUUID(),
             role: message.role === 'assistant' ? 'assistant' : 'user',
             content: String(message.content ?? ''),
+            toolCalls: normalizeStoredToolCalls(message.toolCalls),
             state: 'done',
             at: new Date().toISOString(),
           },
