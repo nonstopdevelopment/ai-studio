@@ -77,12 +77,28 @@ export async function buildToolContext({ prompt, enabledTools, signal, sourceHin
           content,
         });
         const nextUrl = pickLinkedArticleUrl(prompt, content, url);
-        if (nextUrl && !urls.includes(nextUrl) && results.filter((result) => result.tool === 'web_fetch').length < toolPolicy.maxUrlsPerRequest) {
-          results.push({
-            tool: 'web_fetch',
-            ok: true,
-            content: await webFetch({ url: nextUrl, signal }),
-          });
+        if (
+          nextUrl &&
+          !urls.includes(nextUrl) &&
+          results.filter((result) => result.tool === 'web_fetch').length < toolPolicy.maxUrlsPerRequest
+        ) {
+          try {
+            results.push({
+              tool: 'web_fetch',
+              ok: true,
+              content: await webFetch({ url: nextUrl, signal }),
+            });
+          } catch (error) {
+            results.push({
+              tool: 'web_fetch',
+              ok: false,
+              content: {
+                url: nextUrl,
+                error: error.publicCode || 'tool_failed',
+                message: error.publicMessage || 'The linked page could not be fetched.',
+              },
+            });
+          }
         }
       } catch (error) {
         results.push({
@@ -99,11 +115,23 @@ export async function buildToolContext({ prompt, enabledTools, signal, sourceHin
   }
 
   if (enabled.includes('web_search') && sourceHints.length === 0) {
-    results.push({
-      tool: 'web_search',
-      ok: true,
-      content: await webSearch({ query: prompt, signal }),
-    });
+    try {
+      results.push({
+        tool: 'web_search',
+        ok: true,
+        content: await webSearch({ query: prompt, signal }),
+      });
+    } catch (error) {
+      results.push({
+        tool: 'web_search',
+        ok: false,
+        content: {
+          query: prompt,
+          error: error.publicCode || 'tool_failed',
+          message: error.publicMessage || 'The search service could not complete this request.',
+        },
+      });
+    }
   }
 
   return {
