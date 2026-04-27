@@ -548,6 +548,14 @@ function formatClientError(error: unknown) {
   return 'Generation failed before the gateway returned a response.';
 }
 
+function isNetworkLoadFailure(error: unknown) {
+  return error instanceof Error && /load failed|failed to fetch|networkerror|network request failed/i.test(error.message);
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
 function formatGatewayNotice(body: Record<string, unknown>): GatewayNotice | null {
   const error = String(body.error ?? '');
   const retryAfterMs = typeof body.retryAfterMs === 'number' ? body.retryAfterMs : undefined;
@@ -586,6 +594,19 @@ function formatGatewayNotice(body: Record<string, unknown>): GatewayNotice | nul
   }
 
   return null;
+}
+
+function threadHasCompletedPrompt(thread: ChatThread, prompt: string) {
+  const messages = cleanThreadMessages(thread.messages ?? []);
+  let userIndex = -1;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.role === 'user' && message.content.trim() === prompt.trim()) {
+      userIndex = index;
+      break;
+    }
+  }
+  return userIndex >= 0 && messages.slice(userIndex + 1).some((message) => message.role === 'assistant');
 }
 
 function renderInlineMarkdown(text: string) {
@@ -1086,6 +1107,37 @@ export function App() {
     });
   }
 
+  async function recoverThreadAfterDroppedRequest(threadId: string, userPrompt: string) {
+    if (!authToken && authConfig?.authMode === 'required') {
+      return false;
+    }
+
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      await sleep(attempt === 0 ? 1500 : 3000);
+      try {
+        const response = await fetch(`/api/threads/${threadId}`, {
+          headers: getAuthHeaders(authToken, sessionId),
+        });
+        const body = await response.json();
+        if (response.ok && body.thread) {
+          const nextThread = mapServerThread(body.thread);
+          if (threadHasCompletedPrompt(nextThread, userPrompt)) {
+            setActiveThreadId(nextThread.id);
+            setSessionId(nextThread.sessionId);
+            setMessages(cleanThreadMessages(nextThread.messages ?? []));
+            updateThread(cleanThreadMessages(nextThread.messages ?? []), nextThread.title, nextThread.id);
+            setStatusText('Recovered the completed reply from the saved thread.');
+            return true;
+          }
+        }
+      } catch {
+        // Keep polling; transient route drops are the case this recovery handles.
+      }
+    }
+
+    return false;
+  }
+
   async function deleteThread(threadId: string) {
     const nextThreads = threads.filter((thread) => thread.id !== threadId);
     setThreads(nextThreads);
@@ -1244,6 +1296,49 @@ export function App() {
         return nextMessages;
       });
     } catch (error) {
+      if (isNetworkLoadFailure(error)) {
+        const recoveryMessage =
+          'The browser lost the live gateway connection. I am checking the saved thread for the completed reply.';
+        setStatusText(recoveryMessage);
+        setMessages((current) => {
+          const nextMessages = current.map((item) =>
+            item.id === assistantMessageId
+              ? {
+                  ...item,
+                  content: recoveryMessage,
+                  state: 'streaming' as const,
+                }
+              : item
+          );
+          updateThread(nextMessages, undefined, requestThreadId);
+          return nextMessages;
+        });
+
+        const recovered = await recoverThreadAfterDroppedRequest(requestThreadId, trimmedPrompt);
+        if (recovered) {
+          return;
+        }
+
+        const recoveryFailedMessage =
+          'The gateway connection was interrupted and I could not recover a completed reply yet. Your prompt is back in the composer so you can retry.';
+        setPrompt(trimmedPrompt);
+        setStatusText(recoveryFailedMessage);
+        setMessages((current) => {
+          const nextMessages = current.map((item) =>
+            item.id === assistantMessageId
+              ? {
+                  ...item,
+                  content: recoveryFailedMessage,
+                  state: 'done' as const,
+                }
+              : item
+          );
+          updateThread(nextMessages, undefined, requestThreadId);
+          return nextMessages;
+        });
+        return;
+      }
+
       const message = formatClientError(error);
       setStatusText(message);
       setMessages((current) => {
