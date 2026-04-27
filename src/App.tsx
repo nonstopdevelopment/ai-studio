@@ -67,6 +67,12 @@ type GatewayTool = {
   available: boolean;
 };
 
+type GatewayNotice = {
+  message: string;
+  retryAfterMs?: number;
+  shouldRestorePrompt?: boolean;
+};
+
 type GeneratedArtifact = {
   id: string;
   title: string;
@@ -536,10 +542,50 @@ function base64Url(bytes: Uint8Array) {
 
 function formatClientError(error: unknown) {
   if (error instanceof Error) {
-    return `${error.name}: ${error.message}`;
+    return error.message;
   }
 
   return 'Generation failed before the gateway returned a response.';
+}
+
+function formatGatewayNotice(body: Record<string, unknown>): GatewayNotice | null {
+  const error = String(body.error ?? '');
+  const retryAfterMs = typeof body.retryAfterMs === 'number' ? body.retryAfterMs : undefined;
+  const retryText = retryAfterMs ? ` Try again in about ${formatPolicyWindow(retryAfterMs)}.` : '';
+
+  if (error === 'user_request_inflight') {
+    return {
+      message: `Your last message is still running on the shared model lane.${retryText}`,
+      retryAfterMs,
+      shouldRestorePrompt: true,
+    };
+  }
+
+  if (error === 'user_request_queued') {
+    return {
+      message: `You already have a message waiting in the shared model queue.${retryText}`,
+      retryAfterMs,
+      shouldRestorePrompt: true,
+    };
+  }
+
+  if (error === 'queue_full') {
+    return {
+      message: `The shared model queue is full right now.${retryText}`,
+      retryAfterMs,
+      shouldRestorePrompt: true,
+    };
+  }
+
+  if (error === 'rate_limited') {
+    return {
+      message: `You have hit the short-term message limit.${retryText}`,
+      retryAfterMs,
+      shouldRestorePrompt: true,
+    };
+  }
+
+  return null;
 }
 
 function renderInlineMarkdown(text: string) {
@@ -691,7 +737,7 @@ export function App() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [threads, setThreads] = useState<ChatThread[]>([]);
   const [activeThreadId, setActiveThreadId] = useState('new-thread');
-  const [, setStatusText] = useState('');
+  const [statusText, setStatusText] = useState('');
   const [gatewayStatus, setGatewayStatus] = useState<GatewayStatus | null>(null);
   const [gatewayTools, setGatewayTools] = useState<GatewayTool[]>([]);
   const [enabledTools, setEnabledTools] = useState<string[]>([]);
@@ -1141,6 +1187,32 @@ export function App() {
         );
       }
       if (!response.ok) {
+        if (body.status) {
+          applyGatewayStatus(body.status);
+        }
+
+        const notice = formatGatewayNotice(body);
+        if (notice) {
+          setStatusText(notice.message);
+          if (notice.shouldRestorePrompt) {
+            setPrompt(trimmedPrompt);
+          }
+          setMessages((current) => {
+            const nextMessages = current.map((message) =>
+              message.id === assistantMessageId
+                ? {
+                    ...message,
+                    content: notice.message,
+                    state: 'done' as const,
+                  }
+                : message
+            );
+            updateThread(nextMessages, undefined, requestThreadId);
+            return nextMessages;
+          });
+          return;
+        }
+
         const retryAfter =
           typeof body.retryAfterMs === 'number'
             ? ` Retry in about ${formatPolicyWindow(body.retryAfterMs)}.`
@@ -1197,6 +1269,10 @@ export function App() {
   const canUseStudio = isSignedIn || authConfig?.authMode !== 'required';
   const askWorkflows = workflowCards.filter((workflow) => workflow.mode === 'ask');
   const draftWorkflow = workflowCards.find((workflow) => workflow.id === 'deployment-brief') ?? workflowCards[0];
+  const laneIsBusy = Boolean((gatewayStatus?.activeRequests ?? 0) > 0 || (gatewayStatus?.queueDepth ?? 0) > 0);
+  const laneText = laneIsBusy
+    ? `${gatewayStatus?.activeRequests ?? 0} running · ${gatewayStatus?.queueDepth ?? 0} queued`
+    : 'Ready';
 
   return (
     <div className={isSidebarOpen ? 'workspace-app sidebar-open' : 'workspace-app'}>
@@ -1329,7 +1405,7 @@ export function App() {
             <div className="workspace-status">
               <span>{gatewayStatus?.modelName ?? clusterPolicy.modelName}</span>
               <span className="status-dot status-dot--online" />
-              <strong>{gatewayStatus?.mode === 'live' ? 'Online' : gatewayStatus?.mode ?? 'Offline'}</strong>
+              <strong>{gatewayStatus?.mode === 'live' ? laneText : gatewayStatus?.mode ?? 'Offline'}</strong>
             </div>
           </div>
         </header>
@@ -1402,6 +1478,7 @@ export function App() {
 
         <footer className="workspace-composer-shell">
           {authStatus && !isSignedIn ? <div className="workspace-notice">{authStatus}</div> : null}
+          {canUseStudio && statusText ? <div className="workspace-notice workspace-notice--status">{statusText}</div> : null}
           {showComposerTools ? (
             <div className="workspace-tools">
               <div className="workspace-tools__header">
