@@ -1,5 +1,6 @@
 import { toolPolicy } from './policy.mjs';
 import { webFetch } from './web-fetch.mjs';
+import { webSearch } from './web-search.mjs';
 
 const toolDefinitions = [
   {
@@ -9,8 +10,14 @@ const toolDefinitions = [
     enabled: () => toolPolicy.enabled,
   },
   {
+    name: 'web_search',
+    title: 'Web search',
+    description: 'Looks up current information through approved server-side search sources.',
+    enabled: () => toolPolicy.enabled && toolPolicy.webSearchEnabled,
+  },
+  {
     name: 'web_fetch',
-    title: 'Web fetch',
+    title: 'URL fetch',
     description: 'Fetches HTTPS URLs included in the prompt through the gateway safety policy.',
     enabled: () => toolPolicy.enabled && toolPolicy.webFetchEnabled,
   },
@@ -77,6 +84,14 @@ export async function buildToolContext({ prompt, enabledTools, signal }) {
     }
   }
 
+  if (enabled.includes('web_search')) {
+    results.push({
+      tool: 'web_search',
+      ok: true,
+      content: await webSearch({ query: prompt, signal }),
+    });
+  }
+
   return {
     enabledTools: enabled,
     results,
@@ -104,6 +119,28 @@ function formatToolContext(results) {
         `status: ${result.content.status}`,
         result.content.title ? `title: ${result.content.title}` : '',
         result.content.text,
+      ]
+        .filter(Boolean)
+        .join('\n');
+    }
+
+    if (result.tool === 'web_search' && result.ok) {
+      return [
+        `[tool:${index + 1}] web_search`,
+        `query: ${result.content.query}`,
+        result.content.source ? `source: ${result.content.source}` : '',
+        result.content.sourceUrl ? `sourceUrl: ${result.content.sourceUrl}` : '',
+        result.content.note ? `note: ${result.content.note}` : '',
+        ...(result.content.results ?? []).map((item, itemIndex) =>
+          [
+            `${itemIndex + 1}. ${item.title}`,
+            item.url ? `url: ${item.url}` : '',
+            item.publishedAt ? `time: ${item.publishedAt}` : '',
+            item.snippet ? `snippet: ${item.snippet}` : '',
+          ]
+            .filter(Boolean)
+            .join('\n')
+        ),
       ]
         .filter(Boolean)
         .join('\n');

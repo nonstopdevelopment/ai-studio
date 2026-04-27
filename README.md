@@ -114,6 +114,7 @@ pnpm dev:api
 Available prototype tools:
 
 - `time_now`: adds the current gateway time to the model context.
+- `web_search`: looks up current information through approved server-side sources. It can use `SEARXNG_BASE_URL` for general search and includes an MLB schedule resolver backed by the official MLB Stats API.
 - `web_fetch`: fetches HTTPS URLs included in the prompt, with a gateway policy that blocks localhost/private network targets, unsupported content types, oversized responses, credential URLs, and non-HTTPS URLs.
 
 Tool preference endpoints:
@@ -125,6 +126,9 @@ Useful local safety knobs:
 
 ```bash
 AI_TOOL_ALLOWED_DOMAINS=*
+AI_TOOL_WEB_SEARCH_ENABLED=true
+SEARXNG_BASE_URL=http://searxng:8080
+AI_TOOL_MAX_SEARCH_RESULTS=5
 AI_TOOL_BLOCKED_DOMAINS=example.internal,corp.local
 AI_TOOL_MAX_FETCH_BYTES=250000
 AI_TOOL_FETCH_TIMEOUT_MS=8000

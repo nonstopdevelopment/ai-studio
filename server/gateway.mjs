@@ -728,6 +728,12 @@ function getEnabledToolInstruction(enabledTools) {
     );
   }
 
+  if (enabledTools.includes('web_search')) {
+    lines.push(
+      'web_search can look up current information through approved server-side sources. Use its results when present and cite the source name or URL.'
+    );
+  }
+
   if (enabledTools.includes('time_now')) {
     lines.push('time_now provides the current gateway time for date-aware answers.');
   }

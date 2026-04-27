@@ -159,6 +159,7 @@ const examplePrompts = [
 
 const authTokenStorageKey = 'ai-studio-auth-token';
 const authVerifierStorageKey = 'ai-studio-auth-verifier';
+const authExpirySkewMs = 60_000;
 const legacyStarterMessages = [
   'Ask a question to chat with the private-cloud model',
   'Start a private workspace chat',
@@ -374,7 +375,82 @@ function createTabSessionId() {
 }
 
 function getAuthToken() {
-  return window.sessionStorage.getItem(authTokenStorageKey) ?? '';
+  const stored = window.localStorage.getItem(authTokenStorageKey) ?? window.sessionStorage.getItem(authTokenStorageKey);
+  if (!stored) {
+    return '';
+  }
+
+  const record = parseStoredAuthToken(stored);
+  if (!record.accessToken) {
+    return '';
+  }
+
+  if (record.expiresAt && Date.now() > record.expiresAt - authExpirySkewMs) {
+    clearStoredAuthToken();
+    return '';
+  }
+
+  if (stored === record.accessToken) {
+    setStoredAuthToken(record.accessToken);
+  }
+
+  return record.accessToken;
+}
+
+function setStoredAuthToken(accessToken: string, expiresIn?: number | null) {
+  const expiresAt = getAuthTokenExpiry(accessToken, expiresIn);
+  window.localStorage.setItem(
+    authTokenStorageKey,
+    JSON.stringify({
+      accessToken,
+      expiresAt,
+      savedAt: Date.now(),
+    })
+  );
+  window.sessionStorage.removeItem(authTokenStorageKey);
+}
+
+function clearStoredAuthToken() {
+  window.localStorage.removeItem(authTokenStorageKey);
+  window.sessionStorage.removeItem(authTokenStorageKey);
+}
+
+function parseStoredAuthToken(value: string) {
+  try {
+    const parsed = JSON.parse(value);
+    return {
+      accessToken: typeof parsed.accessToken === 'string' ? parsed.accessToken : '',
+      expiresAt: typeof parsed.expiresAt === 'number' ? parsed.expiresAt : null,
+    };
+  } catch {
+    return {
+      accessToken: value,
+      expiresAt: getAuthTokenExpiry(value, null),
+    };
+  }
+}
+
+function getAuthTokenExpiry(accessToken: string, expiresIn?: number | null) {
+  if (typeof expiresIn === 'number' && Number.isFinite(expiresIn) && expiresIn > 0) {
+    return Date.now() + expiresIn * 1000;
+  }
+
+  const claims = decodeJwtPayload(accessToken);
+  return typeof claims?.exp === 'number' ? claims.exp * 1000 : null;
+}
+
+function decodeJwtPayload(token: string): { exp?: number } | null {
+  const payload = token.split('.')[1];
+  if (!payload) {
+    return null;
+  }
+
+  try {
+    const padded = payload.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(payload.length / 4) * 4, '=');
+    return JSON.parse(window.atob(padded));
+  } catch {
+    return null;
+  }
 }
 
 function getAuthHeaders(authToken: string, fallbackSessionId: string): Record<string, string> {
@@ -623,7 +699,7 @@ export function App() {
             throw new Error(tokenBody.message ?? tokenBody.error ?? 'Tampa.dev sign-in failed.');
           }
 
-          window.sessionStorage.setItem(authTokenStorageKey, tokenBody.accessToken);
+          setStoredAuthToken(tokenBody.accessToken, tokenBody.expiresIn);
           window.sessionStorage.removeItem(authVerifierStorageKey);
           setAuthToken(tokenBody.accessToken);
           window.history.replaceState({}, document.title, window.location.pathname);
@@ -657,6 +733,10 @@ export function App() {
         });
         const profile = (await profileResponse.json()) as AuthProfile;
         if (!profileResponse.ok) {
+          if (profileResponse.status === 401 && authToken) {
+            clearStoredAuthToken();
+            setAuthToken('');
+          }
           throw new Error((profile as unknown as { message?: string }).message ?? 'Could not load workspace profile.');
         }
 
@@ -788,7 +868,7 @@ export function App() {
   }
 
   function signOut() {
-    window.sessionStorage.removeItem(authTokenStorageKey);
+    clearStoredAuthToken();
     window.sessionStorage.removeItem(authVerifierStorageKey);
     setAuthToken('');
     setAuthProfile(null);

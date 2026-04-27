@@ -24,6 +24,9 @@ const blockedHostnames = new Set([
 export const toolPolicy = {
   enabled: process.env.AI_TOOLS_ENABLED === 'true',
   webFetchEnabled: process.env.AI_TOOL_WEB_FETCH_ENABLED === 'true',
+  webSearchEnabled: process.env.AI_TOOL_WEB_SEARCH_ENABLED === 'true',
+  searxngBaseUrl: process.env.SEARXNG_BASE_URL || '',
+  maxSearchResults: readInt('AI_TOOL_MAX_SEARCH_RESULTS', 5),
   maxFetchBytes: readInt('AI_TOOL_MAX_FETCH_BYTES', 250_000),
   fetchTimeoutMs: readInt('AI_TOOL_FETCH_TIMEOUT_MS', 8000),
   maxRedirects: readInt('AI_TOOL_MAX_REDIRECTS', 2),
