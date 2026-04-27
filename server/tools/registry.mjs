@@ -223,7 +223,7 @@ function pickSearchResultsToFetch(searchContent) {
 
 function scoreSearchResult(result) {
   const haystack = `${result.title} ${result.url} ${result.snippet}`.toLowerCase();
-  const officialBoost = /\b(official|mlb\.com|rays|schedule|calendar|tickets|event|events|visit|city|busch|gardens|tampa)\b/i.test(
+  const officialBoost = /\b(official|schedule|calendar|tickets?|events?|pricing|prices?|dates?|source|homepage|admission|hours?)\b/i.test(
     haystack
   )
     ? 12

@@ -867,35 +867,73 @@ function looksLikeSourceFollowUp(prompt) {
 }
 
 function buildFollowUpSearchQuery(prompt, messages) {
-  const recentText = [...messages]
+  const recentMessages = [...messages]
     .reverse()
     .slice(0, 6)
-    .map((message) => message.content)
-    .reverse()
-    .join(' ');
-  const entities = extractQueryEntities(`${recentText} ${prompt}`);
-  return uniqueQueryTerms([...entities, prompt, 'official']).join(' ').slice(0, 240);
+    .reverse();
+  const recentText = recentMessages.map((message) => message.content).join(' ');
+  const topics = extractQueryTopics(recentText, prompt);
+  const searchIntent = extractSearchIntent(prompt);
+  return uniqueQueryTerms([...topics, searchIntent || prompt, 'official source']).join(' ').slice(0, 240);
 }
 
-function extractQueryEntities(text) {
-  const value = String(text);
-  const entities = [];
-  const patterns = [
-    /\bTampa Bay Rays\b/gi,
-    /\bRays\b/gi,
-    /\bTampa Bay\b/gi,
-    /\bBusch Gardens\b/gi,
-    /\bFood,\s*Wine\s*&\s*Garden Festival\b/gi,
-    /\bTampa Riverwalk\b/gi,
-    /\bVisit Tampa Bay\b/gi,
+function extractQueryTopics(recentText, prompt) {
+  const combined = `${recentText} ${prompt}`;
+  const phrases = [
+    ...extractCapitalizedPhrases(combined),
+    ...extractRepeatedNouns(combined),
   ];
+  const promptTerms = new Set((String(prompt).toLowerCase().match(/[a-z0-9]{4,}/g) ?? []));
+  return uniqueQueryTerms(phrases)
+    .map((topic) => ({
+      topic,
+      score: scoreTopic(topic, combined, promptTerms),
+    }))
+    .filter((item) => item.score > 0)
+    .sort((left, right) => right.score - left.score)
+    .slice(0, 4)
+    .map((item) => item.topic);
+}
 
-  for (const pattern of patterns) {
-    for (const match of value.matchAll(pattern)) {
-      entities.push(match[0]);
+function extractCapitalizedPhrases(text) {
+  return [...String(text).matchAll(/\b[A-Z][A-Za-z0-9&'.-]*(?:\s+[A-Z][A-Za-z0-9&'.-]*){0,5}\b/g)]
+    .map((match) => match[0])
+    .filter((phrase) => !isWeakTopic(phrase));
+}
+
+function extractRepeatedNouns(text) {
+  const counts = new Map();
+  for (const term of String(text).toLowerCase().match(/[a-z0-9]{4,}/g) ?? []) {
+    if (!isWeakTopic(term)) {
+      counts.set(term, (counts.get(term) ?? 0) + 1);
     }
   }
-  return entities;
+  return [...counts.entries()].filter(([, count]) => count > 1).map(([term]) => term);
+}
+
+function scoreTopic(topic, text, promptTerms) {
+  const lowerTopic = String(topic).toLowerCase();
+  const occurrences = String(text).toLowerCase().split(lowerTopic).length - 1;
+  const promptOverlap = lowerTopic
+    .match(/[a-z0-9]{4,}/g)
+    ?.some((term) => promptTerms.has(term))
+    ? 8
+    : 0;
+  const phraseBoost = topic.includes(' ') ? 5 : 0;
+  return occurrences * 2 + promptOverlap + phraseBoost;
+}
+
+function extractSearchIntent(prompt) {
+  const terms = String(prompt)
+    .toLowerCase()
+    .match(/\b(next|home|away|game|games|schedule|calendar|tickets?|pricing|price|dates?|starts?|ends?|hours?|location|address|details)\b/g);
+  return terms ? [...new Set(terms)].join(' ') : '';
+}
+
+function isWeakTopic(value) {
+  return /^(you|your|they|them|this|that|what|when|where|with|from|based|current|official|source|sources|used|time|search|tampa\.dev|tampa devs ai)$/i.test(
+    String(value).trim()
+  );
 }
 
 function uniqueQueryTerms(values) {
@@ -928,9 +966,7 @@ function scoreSourceForReference(source, referenceText, index) {
   const haystack = `${source.title} ${source.url}`.toLowerCase();
   const terms = referenceText.match(/[a-z0-9]{4,}/g) ?? [];
   const overlap = terms.reduce((score, term) => score + (haystack.includes(term) ? 3 : 0), 0);
-  const officialBoost = /\b(official|visit|city|calendar|events|busch|gardens|tampa|riverwalk|stpete|clearwater)\b/i.test(
-    haystack
-  )
+  const officialBoost = /\b(official|calendar|events?|schedule|tickets?|pricing|dates?|source)\b/i.test(haystack)
     ? 8
     : 0;
   const genericPenalty = /\b(quillbot|summarizer|seat.?geek|ticketmaster|skyscanner|google flights|cheap flights)\b/i.test(
