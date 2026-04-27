@@ -4,6 +4,7 @@ resources:
   - build.yaml
   - configmap.yaml
   - pvc.yaml
+  - searxng.yaml
   - valkey.yaml
   - deployment.yaml
   - service.yaml

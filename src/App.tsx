@@ -11,6 +11,14 @@ type Message = {
   role: 'assistant' | 'user';
   content: string;
   state: 'done' | 'streaming';
+  toolCalls?: ToolCallSummary[];
+};
+
+type ToolCallSummary = {
+  tool: string;
+  ok: boolean;
+  url?: string | null;
+  error?: string | null;
 };
 
 type ButtonVariant = 'primary' | 'secondary';
@@ -601,6 +609,35 @@ function MarkdownRenderer({ content }: { content: string }) {
   );
 }
 
+function ToolCallPills({ toolCalls }: { toolCalls?: ToolCallSummary[] }) {
+  const visibleToolCalls = (toolCalls ?? []).filter((toolCall) => toolCall.tool);
+  if (visibleToolCalls.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="message-tool-calls" aria-label="Tools used">
+      {visibleToolCalls.map((toolCall, index) => (
+        <span
+          key={`${toolCall.tool}-${index}`}
+          className={toolCall.ok ? 'message-tool-call' : 'message-tool-call is-error'}
+          title={toolCall.error || toolCall.url || undefined}
+        >
+          <span aria-hidden="true">{toolCall.ok ? '✓' : '!'}</span>
+          Used {formatToolName(toolCall.tool)}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function formatToolName(toolName: string) {
+  return toolName
+    .split('_')
+    .map((part) => part.slice(0, 1).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
 export function App() {
   if (window.location.pathname.startsWith('/admin')) {
     return <AdminDashboard />;
@@ -1085,6 +1122,7 @@ export function App() {
                 ...message,
                 content: String(body.text ?? ''),
                 state: 'done' as const,
+                toolCalls: Array.isArray(body.tools?.results) ? body.tools.results : [],
               }
             : message
         );
@@ -1298,6 +1336,7 @@ export function App() {
                 <div className="workspace-message__avatar">{message.role === 'assistant' ? 'AI' : 'You'}</div>
                 <div className="workspace-message__body">
                   <span>{message.role === 'assistant' ? 'Tampa.dev AI' : 'You'}</span>
+                  {message.role === 'assistant' ? <ToolCallPills toolCalls={message.toolCalls} /> : null}
                   {message.state === 'streaming' ? (
                     <div className="thinking-card workspace-thinking" role="status" aria-live="polite">
                       <div className="thinking-orbit">

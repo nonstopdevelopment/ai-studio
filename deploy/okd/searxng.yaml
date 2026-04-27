@@ -1,0 +1,97 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ai-studio-searxng-config
+  labels:
+    app: ai-studio-searxng
+data:
+  settings.yml: |
+    use_default_settings: true
+    general:
+      instance_name: "Tampa Devs AI Search"
+    search:
+      formats:
+        - html
+        - json
+      safe_search: 0
+      autocomplete: ""
+    server:
+      bind_address: "0.0.0.0"
+      port: 8080
+      secret_key: "ai-studio-internal-search"
+      limiter: false
+      image_proxy: false
+    ui:
+      static_use_hash: true
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ai-studio-searxng
+  labels:
+    app: ai-studio-searxng
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ai-studio-searxng
+  template:
+    metadata:
+      labels:
+        app: ai-studio-searxng
+    spec:
+      containers:
+        - name: searxng
+          image: docker.io/searxng/searxng:latest
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: SEARXNG_SETTINGS_PATH
+              value: /etc/searxng/settings.yml
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 128m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 768Mi
+          volumeMounts:
+            - name: settings
+              mountPath: /etc/searxng/settings.yml
+              subPath: settings.yml
+              readOnly: true
+            - name: cache
+              mountPath: /var/cache/searxng
+      volumes:
+        - name: settings
+          configMap:
+            name: ai-studio-searxng-config
+        - name: cache
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ai-studio-searxng
+  labels:
+    app: ai-studio-searxng
+spec:
+  selector:
+    app: ai-studio-searxng
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
